@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Votar en Reto Foto</title>
+  <style>
+    body {
+      background-color: #0c0e2c;
+      color: white;
+      font-family: 'Segoe UI', sans-serif;
+      padding: 30px;
+    }
+    h1 {
+      text-align: center;
+      color: #ec1c24;
+    }
+    form {
+      max-width: 1000px;
+      margin: auto;
+    }
+    .foto-card {
+      background-color: #1f2140;
+      border-radius: 10px;
+      padding: 15px;
+      margin: 15px;
+      display: inline-block;
+      vertical-align: top;
+      width: 220px;
+      text-align: center;
+      box-shadow: 0 0 10px rgba(255,255,255,0.1);
+    }
+    .foto-card img {
+      width: 100%;
+      border-radius: 8px;
+      margin-bottom: 10px;
+    }
+    select {
+      width: 100%;
+      padding: 6px;
+      border-radius: 6px;
+      font-size: 1em;
+    }
+    button {
+      background-color: #ec1c24;
+      color: white;
+      font-weight: bold;
+      padding: 12px 20px;
+      border: none;
+      border-radius: 8px;
+      font-size: 1em;
+      display: block;
+      margin: 30px auto;
+      cursor: pointer;
+    }
+    .voto-realizado {
+      color: lightgreen;
+      font-size: 0.9em;
+      margin-top: 5px;
+    }
+  </style>
+</head>
+<body>
+  <h1>📸 Vota en {{ reto_nombre }}</h1>
+<img src="{{ url_for('static', filename='images/mi6.jpg') }}" alt="Banner MI6" style="width: 100%; max-width: 700px; display: block; margin: 20px auto;">
+
+  <div style="text-align: center; margin-top: 20px;">
+    <p>Tienes 3 puntos en total. Puedes darlos todos a una sola foto o repartirlos.</p>
+    <a href="{{ url_for('ranking_fotos') }}?reto={{ reto_nombre }}" style="color: #ec1c24; text-decoration: underline;">🔝 Ver Ranking de este reto</a>
+  </div>
+
+  {% if ya_voto %}
+    <p style="text-align: center; color: lightgreen; font-size: 1.1em;">
+      Ya has enviado tu votación. ¡Gracias por participar!
+    </p>
+  {% endif %}
+
+  <form method="POST" action="{{ request.path }}">
+    {% for foto in fotos %}
+      <div class="foto-card">
+        <img src="{{ url_for('static', filename='fotos_reto_foto/' ~ foto.archivo) }}" alt="Foto participante">
+        <strong>{{ foto.nombre }}</strong>
+
+        {% if ya_voto %}
+          {% if foto.id in votos %}
+            <div class="voto-realizado">Ya votaste aquí ({{ votos[foto.id] }} pts)</div>
+          {% endif %}
+        {% else %}
+          <select name="foto_{{ foto.id }}">
+            <option value="">0 puntos</option>
+            <option value="1">1 punto</option>
+            <option value="2">2 puntos</option>
+            <option value="3">3 puntos</option>
+          </select>
+        {% endif %}
+
+      </div>
+    {% endfor %}
+
+    {% if not ya_voto %}
+      <button type="submit">Enviar Votación</button>
+    {% endif %}
+  </form>
+</body>
+</html>

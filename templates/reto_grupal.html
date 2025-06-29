@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Reto en Equipos</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: 'Segoe UI', sans-serif;
+      background: url('/static/images/fondo_reto_grupal.jpg') no-repeat center center fixed;
+      background-size: cover;
+      color: white;
+      text-align: center;
+    }
+
+    .contenido {
+      background-color: rgba(0, 0, 0, 0.7);
+      max-width: 600px;
+      margin: 80px auto;
+      padding: 30px;
+      border-radius: 15px;
+      box-shadow: 0 0 20px rgba(255, 255, 255, 0.3);
+    }
+
+    textarea,
+    button {
+      width: 100%;
+      margin: 15px 0;
+      padding: 10px;
+      border-radius: 8px;
+      border: none;
+    }
+
+    button {
+      background-color: #ec1c24;
+      color: white;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    h1 {
+      color: gold;
+      text-shadow: 2px 2px 4px #000;
+    }
+
+    label {
+      font-weight: bold;
+      color: #fff;
+      display: block;
+      margin-top: 20px;
+      text-align: left;
+    }
+  </style>
+</head>
+<body>
+  <div class="contenido">
+    <h1>🎯 Tu reto es jugar a: {{ reto }}</h1>
+    <form method="POST" action="/guardar_reto_grupal">
+      <input type="hidden" name="reto" value="{{ reto }}">
+      
+      <label>👥 Nombres de los participantes:</label>
+      <textarea name="nombres" required rows="3"></textarea>
+
+      <button type="submit">Enviar evidencia</button>
+    </form>
+  </div>
+</body>
+</html>

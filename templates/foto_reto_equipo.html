@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Sube tu Foto</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --rojo-espartano:#b22222;
+      --gris-oscuro:#1c1c1c;
+      --gris-medio:#292929;
+      --gris-claro:#e0e0e0;
+    }
+    body{
+      margin:0; padding:0; background:var(--gris-oscuro) url('/static/images/spartan_bg.jpg') center/cover fixed;
+      font-family:'Share Tech Mono',monospace; color:var(--gris-claro);
+    }
+    .box{
+      max-width:520px; margin:60px auto; padding:30px;
+      background:rgba(25,25,25,.9); border-radius:16px;
+      box-shadow:0 0 12px rgba(0,0,0,.6);
+      text-align:center;
+    }
+    h1{margin:0 0 20px; color:var(--rojo-espartano);}
+    .ya-subio{color:lightgreen; margin-bottom:20px;}
+    input[type=file]{margin:20px 0; color:var(--gris-claro);}
+    button{
+      background:var(--rojo-espartano); border:none; color:#fff;
+      padding:10px 30px; font-size:1em; border-radius:8px; cursor:pointer;
+      transition:.3s;
+    }
+    button:hover{background:#8d1c1c;}
+    .flash{background:#2a2a2a; padding:12px; border-radius:8px; margin-bottom:20px; color:lightgreen;}
+  </style>
+</head>
+<body>
+  <div class="box">
+    {% with mensajes = get_flashed_messages() %}
+      {% if mensajes %}
+        <div class="flash">{% for m in mensajes %}{{ m }}{% endfor %}</div>
+      {% endif %}
+    {% endwith %}
+
+    {# ——— Sólo título neutro ——— #}
+    <h1>Sube tu Foto</h1>
+
+    {% if ya_existe %}
+      <p class="ya-subio">Este equipo ya subió su foto para este reto.</p>
+    {% else %}
+      <form method="POST" enctype="multipart/form-data">
+        <input type="file" name="foto" accept="image/*" required>
+        <br>
+        <button type="submit">Enviar</button>
+      </form>
+    {% endif %}
+  </div>
+</body>
+</html>

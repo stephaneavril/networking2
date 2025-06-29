@@ -1,0 +1,86 @@
+body {
+  margin: 0;
+  font-family: 'Segoe UI', sans-serif;
+  background-color: #121826;
+  color: white;
+  text-align: center;
+}
+
+header {
+  background-color: #ec1c24;
+  padding: 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+h1 {
+  font-size: 24px;
+  margin: 0;
+}
+
+/* Temporizador */
+#timer {
+  font-size: 18px;
+  background-color: white;
+  color: #ec1c24;
+  padding: 6px 12px;
+  border-radius: 8px;
+}
+
+/* Tablero estilo bingo 3x3 */
+.bingo-board {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+  padding: 30px;
+}
+
+/* Tarjetas de reto */
+.reto {
+  background-color: #1f2937;
+  border-radius: 12px;
+  padding: 20px;
+  cursor: pointer;
+  transition: transform 0.3s ease, border 0.3s ease;
+  border: 2px solid transparent;
+}
+
+.reto:hover {
+  transform: scale(1.03);
+}
+
+/* Reto activo */
+.reto.active {
+  border-color: #10b981;
+}
+
+/* Reto bloqueado */
+.reto.locked {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Ícono del reto */
+.icon {
+  font-size: 32px;
+  margin-bottom: 8px;
+}
+
+/* Nombre del reto */
+.name {
+  font-size: 16px;
+  font-weight: bold;
+}
+
+/* Footer */
+footer {
+  padding: 20px;
+  font-size: 14px;
+  color: #ccc;
+}
+
+footer a {
+  color: #ec1c24;
+  text-decoration: none;
+}

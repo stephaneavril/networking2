@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Suite Reto Grupal</title>
+</head>
+<body>
+  <h1>📊 Calificación de Participaciones Grupales</h1>
+  {% for foto in fotos %}
+    <div style="border:1px solid #ccc; margin:20px; padding:10px;">
+      <p><strong>Reto:</strong> {{ foto.reto }}</p>
+      <p><strong>Participantes:</strong> {{ foto.nombres_participantes }}</p>
+      <img src="/evidencias_reto_grupal/{{ foto.archivo }}" width="300"><br><br>
+      <form method="POST" action="/calificar/{{ foto.id }}">
+        <input type="number" name="calificacion" placeholder="Puntaje" value="{{ foto.calificacion }}" required>
+        <br>
+        <textarea name="comentario" placeholder="Comentario...">{{ foto.comentario or '' }}</textarea><br>
+        <button type="submit">Guardar calificación</button>
+      </form>
+    </div>
+  {% endfor %}
+</body>
+</html>

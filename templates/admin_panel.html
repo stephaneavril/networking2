@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Panel de Administración</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background-color: #0c0e2c;
+      color: white;
+      padding: 30px;
+    }
+    h1, h2 {
+      color: #ec1c24;
+    }
+    h2 {
+      border-bottom: 2px solid #ec1c24;
+      padding-bottom: 5px;
+      margin-top: 40px;
+    }
+    table {
+      width: 100%;
+      margin-top: 15px;
+      border-collapse: collapse;
+    }
+    th, td {
+      padding: 10px;
+      border-bottom: 1px solid #444;
+    }
+    tr:nth-child(even) {
+      background-color: #1f2140;
+    }
+    button {
+      background: #ec1c24;
+      color: white;
+      padding: 6px 12px;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    input[type="text"], select {
+      padding: 5px;
+      border-radius: 4px;
+      width: 100%;
+    }
+    .activo { color: lightgreen; }
+    .inactivo { color: gray; }
+    .seccion {
+      margin-top: 40px;
+    }
+  </style>
+</head>
+<body>
+
+<h1>🛠️ Panel de Administración</h1>
+
+{% with mensajes = get_flashed_messages() %}
+  {% if mensajes %}
+    <div style="background: #1f2140; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+      {% for msg in mensajes %}
+        <p style="color: lightgreen; margin: 0;">{{ msg }}</p>
+      {% endfor %}
+    </div>
+  {% endif %}
+{% endwith %}
+
+<!-- Activar / Desactivar Retos -->
+<h2>🔧 Activar / Desactivar Retos</h2>
+<table>
+  <tr><th>Nombre</th><th>Descripción</th><th>Estado</th><th>Acción</th></tr>
+  {% for reto in retos %}
+    {% set descripcion = (
+      'Día 1 - Hacer lo correcto' if reto.nombre == 'MI6 v1'
+      else 'Día 2 - Espíritu de equipo' if reto.nombre == 'MI6 v2'
+      else 'Día 3 - Comunicación clara' if reto.nombre == 'MI6 v3'
+      else ''
+    ) %}
+    <tr style="background-color: {{ '#182038' if not reto.activo else '#203d27' }};">
+      <td><strong>{{ reto.nombre }}</strong></td>
+      <td style="font-size: 0.9em;">{{ descripcion }}</td>
+      <td class="{{ 'activo' if reto.activo else 'inactivo' }}">
+        {{ '✅ Activo' if reto.activo else '❌ Inactivo' }}
+      </td>
+      <td>
+        <form method="POST" action="/admin_panel" style="display:inline;">
+          <input type="hidden" name="reto_id" value="{{ reto.id }}">
+          <input type="hidden" name="activo" value="{{ 0 if reto.activo else 1 }}">
+          <button type="submit">{{ 'Desactivar' if reto.activo else 'Activar' }}</button>
+        </form>
+        {% if 'MI6' in reto.nombre and not reto.activo %}
+          <form method="POST" action="/admin_panel" style="display:inline; margin-left: 5px;">
+            <input type="hidden" name="activar_solo" value="{{ reto.id }}">
+            <button type="submit">🔁 Activar solo este</button>
+          </form>
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+</table>
+
+<!-- Ranking Adivina Quién -->
+<h2>🏆 Ranking Adivina Quién</h2>
+<table>
+  <tr><th>Nombre</th><th>Aciertos</th><th>Bonus</th><th>Total</th></tr>
+  {% for r in resultados %}
+  <tr>
+    <td>{{ r['nombre_jugador'] }}</td>
+    <td>{{ r['aciertos'] }}</td>
+    <td>{{ r['puntos_extra'] - r['aciertos'] * 3 }}</td>
+    <td>{{ r['puntos_extra'] }}</td>
+  </tr>
+  {% endfor %}
+</table>
+
+<!-- Reset general: solo Eliminar Todos -->
+<h2>🧹 Administración</h2>
+<form method="POST" action="/eliminar_todos_los_jugadores" onsubmit="return confirm('¿Eliminar jugadores y toda la data?');">
+  <button type="submit" style="background: darkred;">🧨 Eliminar TODOS los jugadores</button>
+</form>
+
+<!-- Fotos por equipo -->
+<h2>📷 Ver fotos por equipo</h2>
+<a href="/ver_fotos_equipo" target="_blank" style="color:lightblue;">Ver todas las fotos subidas por equipos</a>
+
+<form action="/reset_reto_equipo_foto" method="POST" style="display:inline-block; margin-top: 10px;">
+  <button onclick="return confirm('¿Seguro que deseas borrar todas las fotos del reto de equipo?')" class="btn btn-danger">
+    🗑️ Borrar todas las fotos de equipo
+  </button>
+</form>
+<h2>📷 Progreso de Fotos</h2>
+<table>
+  <tr><th>Equipo</th><th>Foto 1</th><th>Foto 2</th><th>Foto 3</th></tr>
+  {% for equipo, fotos in equipos.items() %}
+    <tr>
+      <td>{{ equipo }}</td>
+      {% for n in (1,2,3) %}
+        <td>
+          {% if fotos.get(n) %}
+            <a href="{{ url_for('static', filename='fotos_reto_%d/%s' % (n, fotos[n])) }}" target="_blank">🖼️</a>
+          {% else %}
+            ❌
+          {% endif %}
+        </td>
+      {% endfor %}
+    </tr>
+  {% endfor %}
+</table>
+
+
+<!-- Generar contenido Adivina -->
+<h2>🧠 Generar Contenido Juego Adivina Quién</h2>
+<form method="POST" action="/generar_contenido_adivina" onsubmit="return confirm('¿Regenerar contenido de Adivina Quién?');">
+  <button type="submit">📄 Generar contenido</button>
+</form>
+
+<!-- Botón manual para generar matches IA -->
+<h2>🤖 Matching IA - Conexión Alfa</h2>
+<form method="POST" action="/generar_matches_conexion_alfa" onsubmit="return confirm('¿Ejecutar matching con IA nuevamente?');">
+  <button type="submit">⚙️ Generar Matches IA</button>
+</form>
+
+<!-- Conexión Alfa - Ver Evidencias -->
+<h2>🎥 Evidencias Conexión Alfa</h2>
+<table>
+  <tr>
+    <th>Pareja</th>
+    <th>Video</th>
+    <th>Feedback</th>
+  </tr>
+  {% for m in matches_conexion %}
+    <tr>
+      <td>{{ m.nombre_1 }} 🤝 {{ m.nombre_2 }}</td>
+      <td>
+        {% if m.evidencia %}
+          <a href="{{ url_for('static', filename='evidencias_alfa/' ~ m.evidencia) }}" target="_blank">📽️ Ver Video</a>
+        {% else %}
+          <span style="color: gray;">Sin video</span>
+        {% endif %}
+      </td>
+      <td>
+        {% if m.feedback == 1 %}
+          ✅ Positivo
+        {% elif m.feedback == 0 %}
+          ❌ Negativo
+        {% else %}
+          🕓 Pendiente
+        {% endif %}
+      </td>
+    </tr>
+  {% endfor %}
+</table>
+
+</body>
+</html>

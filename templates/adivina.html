@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>🎬 Adivina Quién - El Casting</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: radial-gradient(circle at top center, #1a1d3d, #0c0e2c);
+      color: white;
+      text-align: center;
+      padding: 20px;
+    }
+
+    h1 {
+      font-size: 2.5em;
+      color: #ec1c24;
+      text-shadow: 2px 2px 5px black;
+      letter-spacing: 2px;
+      margin-bottom: 10px;
+    }
+
+    .tarjeta {
+      background-color: #1f2140;
+      padding: 30px;
+      margin: 30px auto;
+      border-radius: 15px;
+      max-width: 550px;
+      box-shadow: 0 0 20px rgba(236, 28, 36, 0.3);
+      border: 2px solid #ec1c24;
+      transition: transform 0.3s ease-in-out;
+    }
+
+    .tarjeta:hover {
+      transform: scale(1.02);
+    }
+
+    p {
+      font-size: 1.1em;
+      margin: 8px 0;
+    }
+
+    select {
+      padding: 10px;
+      font-size: 16px;
+      width: 85%;
+      margin-top: 15px;
+      border-radius: 6px;
+      border: none;
+    }
+
+    button {
+      padding: 12px 24px;
+      margin-top: 20px;
+      font-size: 16px;
+      border: none;
+      background-color: #ec1c24;
+      color: white;
+      border-radius: 8px;
+      cursor: pointer;
+      box-shadow: 0 0 10px rgba(236, 28, 36, 0.4);
+    }
+
+    #resultado {
+      margin-top: 20px;
+      font-weight: bold;
+      font-size: 1.2em;
+    }
+
+    #puntaje {
+      margin-top: 10px;
+      color: lightgreen;
+      font-weight: bold;
+    }
+
+    #timer {
+      font-size: 1.2em;
+      margin-top: 10px;
+      color: #ffca28;
+    }
+
+    #advertencia {
+      display: none;
+      font-weight: bold;
+      color: #ffeb3b;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <h1>🎬 Adivina Quién - El Casting</h1>
+
+  <div class="tarjeta">
+    <div id="timer">⏳ Tiempo restante: 20:00</div>
+    <div id="advertencia">⚠️ ¡Quedan solo 2 minutos! Adivina rápido...</div>
+    <div id="contenido"></div>
+
+    <select id="respuesta">
+      <option value="" disabled selected>🎭 ¿Quién crees que es?</option>
+      {% for p in participantes %}
+        <option value="{{ p.nombre_completo }}">{{ p.nombre_completo }}</option>
+      {% endfor %}
+    </select>
+
+    <br>
+    <button onclick="verificar()">Responder</button>
+    <div id="resultado"></div>
+    <div id="puntaje">Puntaje: 0</div>
+  </div>
+
+  <script>
+    let participantes = {{ participantes|tojson }};
+    participantes = participantes.sort(() => 0.5 - Math.random()).slice(0, 12);
+
+    let indices_restantes = participantes.map((_, i) => i);
+    let actual;
+    let aciertos = 0;
+    let puntaje = 0;
+    let tiempoRestante = 1200; // 20 minutos
+    let temporizadorIntervalo;
+
+    const frases_keys = [
+      ["dato_curioso", "🧠 Dato curioso"],
+      ["pelicula_favorita", "🎬 Película favorita"],
+      ["no_soporto", "🤢 No soporta"],
+      ["prenda_imprescindible", "👕 Prenda imprescindible"],
+      ["mejor_concierto", "🎤 Concierto"],
+      ["pasion", "🎶 Pasión"]
+    ];
+
+    function mostrarFrase() {
+      if (indices_restantes.length === 0) {
+        finalizarJuego();
+        return;
+      }
+
+      const idx = Math.floor(Math.random() * indices_restantes.length);
+      const i = indices_restantes[idx];
+      actual = participantes[i];
+      indices_restantes.splice(idx, 1);
+
+      const seleccionadas = frases_keys.sort(() => 0.5 - Math.random()).slice(0, 3);
+      let pistas = "";
+      for (const [clave, etiqueta] of seleccionadas) {
+        pistas += `<p><strong>${etiqueta}:</strong> ${actual[clave]}</p>`;
+      }
+
+      document.getElementById("contenido").innerHTML = pistas;
+      document.getElementById("respuesta").value = "";
+      document.getElementById("resultado").innerText = "";
+    }
+
+    function verificar() {
+      const seleccion = document.getElementById("respuesta").value.trim().toLowerCase();
+      const correcto = actual.nombre_completo.trim().toLowerCase();
+
+      if (seleccion === correcto) {
+        document.getElementById("resultado").innerText = "✅ ¡Correcto!";
+        aciertos++;
+        puntaje += 10;
+
+        // Eliminar nombre del selector
+        const optionToRemove = document.querySelector(`#respuesta option[value="${actual.nombre_completo}"]`);
+        if (optionToRemove) optionToRemove.remove();
+
+        document.getElementById("puntaje").innerText = `Puntaje: ${puntaje}`;
+        setTimeout(mostrarFrase, 1000);
+      } else {
+        document.getElementById("resultado").innerText = "❌ Incorrecto, intenta con otro nombre.";
+        puntaje -= 10;
+        document.getElementById("puntaje").innerText = `Puntaje: ${puntaje}`;
+      }
+    }
+
+    function finalizarJuego() {
+      clearInterval(temporizadorIntervalo);
+      fetch('/adivina_finalizado', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ aciertos, puntaje })
+      })
+      .then(res => res.json())
+      .then(data => {
+        alert(data.message || data.error);
+        window.location.href = "/ranking_adivina";
+      });
+    }
+
+    function iniciarTemporizador() {
+      const timer = document.getElementById("timer");
+      const advertencia = document.getElementById("advertencia");
+
+      temporizadorIntervalo = setInterval(() => {
+        tiempoRestante--;
+        const min = Math.floor(tiempoRestante / 60);
+        const seg = tiempoRestante % 60;
+        timer.innerText = `⏳ Tiempo restante: ${min.toString().padStart(2, '0')}:${seg.toString().padStart(2, '0')}`;
+
+        if (tiempoRestante === 120) {
+          advertencia.style.display = "block";
+        }
+
+        if (tiempoRestante <= 0) {
+          clearInterval(temporizadorIntervalo);
+          alert("⏰ ¡Se acabó el tiempo!");
+          finalizarJuego();
+        }
+      }, 1000);
+    }
+
+    // Iniciar todo
+    mostrarFrase();
+    iniciarTemporizador();
+  </script>
+
+</body>
+</html>

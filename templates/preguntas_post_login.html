@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Conócete Mejor</title>
+  <style>
+    body {
+      background: url('/static/images/cine1.jpg') no-repeat center center fixed;
+      background-size: cover;
+      font-family: 'Segoe UI', sans-serif;
+      color: white;
+      padding: 30px;
+    }
+    .form-box {
+      background-color: rgba(0, 0, 0, 0.8);
+      max-width: 700px;
+      margin: auto;
+      padding: 30px;
+      border-radius: 10px;
+    }
+    h1 {
+      color: #ec1c24;
+      text-align: center;
+    }
+    label {
+      display: block;
+      margin: 15px 0 5px;
+      font-weight: bold;
+    }
+    input[type="text"] {
+      width: 100%;
+      padding: 8px;
+      border-radius: 6px;
+      border: none;
+      margin-bottom: 10px;
+    }
+    button {
+      background: #ec1c24;
+      color: white;
+      padding: 12px 20px;
+      border: none;
+      border-radius: 6px;
+      font-size: 1em;
+      cursor: pointer;
+      display: block;
+      margin: auto;
+      margin-top: 20px;
+    }
+    a {
+      color: #ffb;
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="form-box">
+    {% if ya_respondio %}
+      <h1>✅ Ya respondiste estas preguntas</h1>
+      <p>Puedes ver tu perfil <a href="/conexion_alfa_mi_perfil">aquí</a>.</p>
+    {% else %}
+      <h1>🧠 Conócete Mejor</h1>
+      <form method="POST">
+        <label>1. Dato curioso o inesperado sobre ti</label>
+        <input type="text" name="r3" required>
+      
+        <label>2. Tu película favorita</label>
+        <input type="text" name="r4" required>
+      
+        <label>3. Algo que no soportas (pero que todos aman)</label>
+        <input type="text" name="r6" required>
+      
+        <label>4. Prenda de ropa sin la que no podrías vivir</label>
+        <input type="text" name="r8" required>
+      
+        <label>5. El mejor concierto al que has ido</label>
+        <input type="text" name="r9" required>
+      
+        <label>6. Pasión fuera del trabajo</label>
+        <input type="text" name="r2" required>
+      
+        <button type="submit">Guardar Respuestas</button>
+      </form>      
+    {% endif %}
+  </div>
+
+</body>
+</html>

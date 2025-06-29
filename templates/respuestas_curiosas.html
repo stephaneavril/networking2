@@ -1,0 +1,43 @@
+<!-- templates/respuestas_curiosas.html -->
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Respuestas Curiosas</title>
+  <style>
+    body {
+      background-color: #0c0e2c;
+      color: white;
+      font-family: 'Segoe UI', sans-serif;
+      padding: 30px;
+    }
+    .carta {
+      background-color: #1f2140;
+      padding: 20px;
+      margin-bottom: 20px;
+      border-radius: 10px;
+    }
+    h1 {
+      color: #ec1c24;
+      text-align: center;
+      margin-bottom: 40px;
+    }
+    strong {
+      color: #ffca28;
+    }
+  </style>
+</head>
+<body>
+  <h1>💬 Respuestas Curiosas de Participantes</h1>
+  {% for p in destacados %}
+    <div class="carta">
+      <p><strong>{{ p.nombre }}</strong></p>
+      <ul>
+        {% for frase in p.frases %}
+          <li>{{ frase }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endfor %}
+</body>
+</html>

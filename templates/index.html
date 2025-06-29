@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>ESPARTANOS PROFUTURO</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <style>
+    /* ─── Paleta de colores espartana ─── */
+    :root {
+      --rojo-espartano: #b22222;
+      --gris-oscuro: #1c1c1c;
+      --gris-medio:  #292929;
+      --gris-claro:  #e0e0e0;
+      --verde-badge: #556b2f;
+    }
+
+    /* ─── Layout General ─── */
+    body {
+      font-family: 'Share Tech Mono', monospace;
+      background-color: var(--gris-oscuro);
+      color: var(--gris-claro);
+      margin: 0;
+      padding: 0;
+      /* Imagen de fondo temática espartana */
+      background-image: url('/static/images/spartan_bg.jpg');
+      background-size: cover;
+      background-position: center;
+      background-attachment: fixed;
+    }
+
+    /* ─── Encabezado ─── */
+    header {
+      background: rgba(255,255,255,0.95);   /* fondo casi blanco para resaltar logo */
+      padding: 20px;
+      text-align: center;
+      font-size: 1.6em;
+      font-weight: bold;
+      border-bottom: 4px solid var(--rojo-espartano);
+      color: var(--rojo-espartano);          /* texto en rojo espartano */
+    }
+
+    /* ─── Contenedor principal ─── */
+    .container {
+      max-width: 700px;
+      margin: 30px auto;
+      padding: 20px;
+      background: rgba(28, 28, 28, 0.9);
+      border-radius: 12px;
+      box-shadow: 0 0 15px rgba(0,0,0,0.6);
+    }
+
+    /* ─── Cuadrícula de retos ─── */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 15px;
+    }
+
+    /* ─── Tarjetas ─── */
+    .card {
+      background: var(--gris-medio);
+      border-radius: 12px;
+      padding: 20px;
+      text-align: center;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      transition: 0.3s;
+      cursor: pointer;
+      border: 1px solid #444;
+    }
+    .card:hover { background: #333; }
+    .card.desactivado {
+      background: #2c2c2c;
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .card h3 {
+      margin: 10px 0 0;
+      font-size: 1em;
+      color: var(--gris-claro);
+    }
+
+    /* ─── Badges ─── */
+    .badge {
+      background: var(--verde-badge);
+      color: white;
+      padding: 4px 8px;
+      border-radius: 8px;
+      font-size: 0.75em;
+      display: inline-block;
+    }
+
+    /* ─── Pie de página ─── */
+    footer {
+      text-align: center;
+      padding: 20px;
+      font-size: 0.9em;
+      background-color: #151515;
+      color: #aaa;
+    }
+    footer a {
+      color: var(--rojo-espartano);
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <img src="{{ url_for('static', filename='images/profuturo.png') }}" alt="Profuturo" style="max-height: 60px; vertical-align: middle;">
+  <span style="margin-left: 10px;">ESPARTANOS PROFUTURO</span>
+</header>
+
+<div class="container">
+  {# ───── Mensajes flash ───── #}
+  {% with mensajes = get_flashed_messages() %}
+    {% if mensajes %}
+      <div style="background: #2a2a2a; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+        {% for msg in mensajes %}
+          <p style="color: lightgreen; margin: 0;">{{ msg }}</p>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+
+  <p style="text-align: center; font-size: 1.1em;">
+    ¡Hola {{ session['jugador'] }}! Selecciona un reto para comenzar:
+  </p>
+
+  <div class="grid">
+    {# ───── Mostrar TODOS los retos activos ───── #}
+    {% for reto in retos %}
+      {% if reto.activo %}
+        {% set reto_url = (
+          '/reto_mi6_v1' if reto.nombre == 'MI6 v1'
+          else '/reto_mi6_v2' if reto.nombre == 'MI6 v2'
+          else '/reto_mi6_v3' if reto.nombre == 'MI6 v3'
+          else '/adivina' if reto.nombre == 'Adivina Quién'
+          else '/reto_grupal' if reto.nombre == 'Reto en Equipos'
+          else '/reto_foto' if reto.nombre == 'Reto Foto'
+          else '/ver_fotos_reto_foto' if reto.nombre|lower == 'ver fotos y votar'
+          else '/ranking_fotos' if reto.nombre == 'Ranking Fotos'
+          else '/conexion_alfa' if reto.nombre == 'Conexión Alfa'
+          else '/foto_reto/1' if reto.nombre == 'Foto RETO 1'
+          else '/foto_reto/2' if reto.nombre == 'Foto RETO 2'
+          else '/foto_reto/3' if reto.nombre == 'Foto RETO 3'
+          else '#'
+        ) %}
+        <div class="card" onclick="location.href='{{ reto_url }}'">
+          <div class="badge">
+            {# Iconos o puntaje #}
+            {% if reto.nombre in ['MI6 v1','MI6 v2','MI6 v3'] %}
+              {% if reto.nombre == 'MI6 v1' %}📸{% elif reto.nombre == 'MI6 v2' %}🤝{% else %}🗣️{% endif %}
+            {% elif reto.nombre in ['Ver Fotos y Votar', 'Ver Fotos de Equipos'] %}🖼️
+            {% elif reto.nombre == 'Ranking Fotos' %}🏆
+            {% elif reto.nombre in ['Foto RETO 1','Foto RETO 2','Foto RETO 3'] %}📷
+            {% else %}+{{ reto.puntos }}
+            {% endif %}
+          </div>
+          <h3>{{ reto.nombre }}</h3>
+        </div>
+      {% endif %}
+    {% endfor %}
+  </div>
+
+  {# El ranking de escaneo QR siempre visible #}
+  <div class="card" style="margin-top: 30px;" onclick="window.open('/ranking_qr', '_blank')">
+    <div class="badge">📲</div>
+    <h3>Ranking Escaneo QR</h3>
+    <p style="margin-top:10px;">Haz clic para ver el ranking en tiempo real</p>
+  </div>
+</div>
+
+<footer>
+  &copy; 2025 TEAMS | <a href="https://teams.com.mx">teams.com.mx</a>
+</footer>
+
+</body>
+</html>

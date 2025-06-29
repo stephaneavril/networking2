@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Emparejamientos Conexión Alfa</title>
+  <style>
+    body { background: #0c0e2c; color: white; font-family: 'Segoe UI', sans-serif; padding: 30px; }
+    h1 { text-align: center; color: #ec1c24; }
+    .match-card {
+      background: #1f2140; padding: 20px; border-radius: 10px;
+      margin: 20px auto; max-width: 700px; box-shadow: 0 0 10px rgba(255,255,255,0.1);
+    }
+    .match-card strong { color: #ec1c24; }
+    .perfil { margin-top: 10px; font-style: italic; }
+    .form-confirm { margin-top: 15px; }
+    button {
+      background: #ec1c24; color: white; border: none; padding: 10px 20px;
+      border-radius: 6px; cursor: pointer; margin-right: 10px;
+    }
+    .metricas {
+      background: #1f2140;
+      padding: 20px;
+      border-radius: 8px;
+      margin-top: 40px;
+      max-width: 500px;
+      margin-left: auto;
+      margin-right: auto;
+      text-align: center;
+      box-shadow: 0 0 10px rgba(255,255,255,0.1);
+    }
+    .metricas h3 {
+      color: #ec1c24;
+      margin-bottom: 10px;
+    }
+    .metricas p {
+      margin: 5px 0;
+      font-size: 1.1em;
+    }
+  </style>
+</head>
+<body>
+  <h1>🔗 Conexión Alfa: Tus Matches</h1>
+
+  {% for match in matches %}
+    <div class="match-card">
+      <strong>{{ match.nombre_1 }}</strong> 🤝 <strong>{{ match.nombre_2 }}</strong>
+      <div class="perfil">{{ match.perfil_1 }}</div>
+      <div class="perfil">{{ match.perfil_2 }}</div>
+
+      {% if match.feedback is none %}
+        <form class="form-confirm" method="POST" action="/confirmar_match">
+          <input type="hidden" name="match_id" value="{{ match.id }}">
+          <button name="respuesta" value="1">✅ Fue un buen match</button>
+          <button name="respuesta" value="0">❌ No fue un buen match</button>
+        </form>
+      {% else %}
+        <p style="color: lightgreen;">Respuesta registrada: {{ '✅ Sí' if match.feedback else '❌ No' }}</p>
+      {% endif %}
+    </div>
+  {% endfor %}
+
+  {% if accuracy is not none %}
+    <div class="metricas">
+      <h3>📊 Métricas del algoritmo IA</h3>
+      <p><strong>Accuracy:</strong> {{ accuracy }}</p>
+      <p><strong>Precision:</strong> {{ precision }}</p>
+      <p><strong>Recall:</strong> {{ recall }}</p>
+      <p><strong>F1-Score:</strong> {{ f1 }}</p>
+    </div>
+  {% endif %}
+</body>
+</html>

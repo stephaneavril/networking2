@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Ingresar a ESPARTANOS</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <style>
+    body{
+      background:#0c0e2c url('/static/images/fondo_tlou.jpg') center/cover fixed;
+      color:#e0e0e0;font-family:'Share Tech Mono',monospace;
+      display:flex;align-items:center;justify-content:center;height:100vh;margin:0;
+    }
+    .login-box{
+      background:rgba(28,28,28,.9);padding:40px 30px;border-radius:10px;
+      box-shadow:0 0 25px rgba(178,34,34,.6);text-align:center;max-width:400px;width:100%;
+      border:1px solid #b22222;
+    }
+    .login-box h2{color:#b22222;margin-bottom:10px}
+    .login-box p{font-size:.95em;margin-bottom:25px}
+    input{display:block;margin:15px auto;padding:12px;width:90%;font-size:16px;border:none;border-radius:6px;background:#2a2a2a;color:#fff;box-shadow:inset 0 0 5px #000}
+    button{background:#b22222;color:#fff;border:none;padding:12px 24px;font-size:16px;border-radius:6px;cursor:pointer;margin-top:15px;box-shadow:0 0 10px rgba(178,34,34,.3);transition:.2s}
+    button:hover{background:#d63031}
+  </style>
+</head>
+<body>
+  <div class="login-box">
+    <h2>🎮 ESPARTANOS PROFUTURO</h2>
+    <p>Ingresa tu nombre, equipo y correo</p>
+    <form method="POST" action="{{ url_for('login', next=request.args.get('next','/')) }}">
+      <input type="text"   name="jugador" placeholder="Nombre completo" required>
+      <input type="text"   name="equipo"  placeholder="Nombre del equipo" required>
+      <input type="email"  name="correo"  placeholder="Correo electrónico" required>
+      <button type="submit">Entrar</button>
+    </form>
+  </div>
+</body>
+</html>

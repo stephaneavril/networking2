@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Ranking de Fotos</title>
+  <style>
+    body {
+      background-color: #0c0e2c;
+      font-family: 'Segoe UI', sans-serif;
+      color: white;
+      text-align: center;
+      padding: 20px;
+    }
+    .foto {
+      background: #1f2140;
+      margin: 20px auto;
+      padding: 15px;
+      border-radius: 12px;
+      max-width: 400px;
+      box-shadow: 0 0 10px rgba(255,255,255,0.1);
+    }
+    .foto img {
+      max-width: 100%;
+      border-radius: 10px;
+    }
+    h2 {
+      color: #ec1c24;
+    }
+  </style>
+</head>
+<body>
+  <h1>📸 Ranking de {{ reto_nombre }}</h1>
+
+  {% for foto in ranking %}
+    <div class="foto">
+      <img src="{{ url_for('static', filename='fotos_reto_foto/' ~ foto['archivo']) }}" alt="foto">
+      <h2>{{ foto['nombre'] }}</h2>
+      <p>Puntos recibidos: <strong>{{ foto['total_puntos'] or 0 }}</strong></p>
+    </div>
+  {% endfor %}
+
+  <a href="/">⬅️ Volver al inicio</a>
+</body>
+</html>

@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Tu Perfil Generado con IA</title>
+  <style>
+    body {
+      background-image: url("/static/images/cine2.jpg");
+      background-size: cover;
+      background-position: center;
+      background-repeat: no-repeat;
+      color: white;
+      font-family: 'Segoe UI', sans-serif;
+      padding: 40px;
+    }
+    h1 {
+      color: #ffcc00;
+      text-align: center;
+    }
+    .perfil {
+      background: rgba(0,0,0,0.8);
+      padding: 30px;
+      border-radius: 12px;
+      font-size: 1.2em;
+      max-width: 800px;
+      margin: auto;
+    }
+    .boton {
+      display: block;
+      background: #ec1c24;
+      color: white;
+      padding: 12px 20px;
+      font-size: 1em;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      margin: 30px auto 0 auto;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <h1>🧠 Tu Perfil Generado con IA</h1>
+  <div class="perfil">{{ perfil['perfil_ia'] }}</div>
+
+  <form action="/conexion_alfa_match" method="GET">
+    <button class="boton" type="submit">🔗 Ver mi Conexión Alfa</button>
+  </form>
+</body>
+</html>

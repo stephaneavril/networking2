@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Reto Foto</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background-color: #0c0e2c;
+      color: white;
+      padding: 40px;
+      text-align: center;
+    }
+
+    .container {
+      background-color: #1f2140;
+      padding: 30px;
+      border-radius: 15px;
+      max-width: 600px;
+      margin: auto;
+      box-shadow: 0 0 20px rgba(255, 255, 255, 0.1);
+    }
+
+    h1 {
+      color: #ec1c24;
+    }
+
+    input[type="file"], button {
+      width: 100%;
+      padding: 10px;
+      margin-top: 15px;
+      border-radius: 8px;
+      border: none;
+      font-size: 1em;
+    }
+
+    button {
+      background-color: #ec1c24;
+      color: white;
+      font-weight: bold;
+      cursor: pointer;
+    }
+
+    .ya-subido {
+      background-color: #2d2f4c;
+      padding: 20px;
+      border-radius: 10px;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    {% if 'MI6' in reto_nombre %}
+      <img src="{{ url_for('static', filename='images/mi6.jpg') }}" alt="MI6 Banner" style="max-width: 100%; border-radius: 15px; margin-bottom: 20px;">
+    {% endif %}
+  
+    <h1>📸 {{ reto_nombre }}</h1>
+  
+    {% if ya_existe %}
+      <div class="ya-subido">
+        <p>Ya has subido tu foto para este reto. ¡Gracias por participar!</p>
+      </div>
+    {% else %}
+      <form method="POST" enctype="multipart/form-data">
+        <p>{{ mensaje if mensaje else "Sube una foto original que represente los valores de FARMAPIEL, solo puedes subir una foto. Esta será votada por los demás participantes." }}</p>
+        <input type="file" name="foto" accept="image/*" required>
+        <button type="submit">Subir Foto</button>
+      </form>
+    {% endif %}
+  </div>
+  
+</body>
+</html>

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>📸 Fotos por Equipo</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #111;
+      color: white;
+      padding: 20px;
+    }
+
+    h2 {
+      color: #ffca28;
+      border-bottom: 2px solid #555;
+      padding-bottom: 5px;
+    }
+
+    .grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 15px;
+    }
+
+    .foto {
+      background: #222;
+      padding: 10px;
+      border-radius: 8px;
+      width: 180px;
+      text-align: center;
+    }
+
+    .foto img {
+      width: 100%;
+      border-radius: 5px;
+      max-height: 160px;
+      object-fit: cover;
+    }
+
+    .nombre {
+      margin-top: 8px;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <h1>📸 Galería de Fotos por Equipo</h1>
+
+  {% for equipo, fotos in equipos.items() %}
+    <h2>Equipo {{ equipo }}</h2>
+    <div class="grid">
+      {% for f in fotos %}
+        <div class="foto">
+          <img src="{{ url_for('static', filename='fotos_equipo/' + f.archivo) }}" alt="Foto">
+          <div class="nombre">{{ f.nombre }}</div>
+        </div>
+      {% endfor %}
+    </div>
+  {% endfor %}
+</body>
+</html>
