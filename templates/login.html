@@ -7,7 +7,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
   <style>
     body{
-      background:#0c0e2c url('/static/images/fondo_tlou.jpg') center/cover fixed;
+      background:#0c0e2c url('/static/images/fondo_spartan.jpg') center/cover fixed;
       color:#e0e0e0;font-family:'Share Tech Mono',monospace;
       display:flex;align-items:center;justify-content:center;height:100vh;margin:0;
     }
@@ -25,11 +25,12 @@
 </head>
 <body>
   <div class="login-box">
-    <h2>🎮 ESPARTANOS PROFUTURO</h2>
-    <p>Ingresa tu nombre, equipo y correo</p>
+    <h2>ESPARTANOS PROFUTURO</h2>
+    <p>Ingresa tu nombre, <strong>NÚMERO</strong> de equipo y correo</p>
     <form method="POST" action="{{ url_for('login', next=request.args.get('next','/')) }}">
       <input type="text"   name="jugador" placeholder="Nombre completo" required>
-      <input type="text"   name="equipo"  placeholder="Nombre del equipo" required>
+      <!-- Cambiado: ahora número de equipo -->
+      <input type="number" name="equipo"  placeholder="Número de equipo" min="1" step="1" required>
       <input type="email"  name="correo"  placeholder="Correo electrónico" required>
       <button type="submit">Entrar</button>
     </form>

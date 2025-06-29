@@ -70,61 +70,34 @@ def login_required(view):
             return redirect(url_for('login', next=request.path))
         return view(*args, **kwargs)
     return wrapped
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     next_url = request.args.get('next', '/')
+
     if request.method == 'POST':
         jugador = request.form['jugador'].strip()
-        equipo  = request.form['equipo'].strip()
+        equipo  = request.form['equipo'].strip()   # ← seguirá llamándose equipo
         correo  = request.form['correo'].strip()
-        if not jugador or not equipo or not correo:
-            flash('⚠️ Debes escribir tu nombre, equipo y correo')
+
+        # ✅ Nueva validación: equipo numérico positivo
+        if not equipo.isdigit() or int(equipo) <= 0:
+            flash('⚠️ El número de equipo debe ser un entero positivo')
             return render_template('login.html', next=next_url)
 
-        session.update({'jugador': jugador, 'equipo': equipo, 'correo': correo})
-        flash(f'¡Bienvenido {jugador} del equipo {equipo}!')
+        if not jugador or not correo:
+            flash('⚠️ Debes escribir tu nombre y correo')
+            return render_template('login.html', next=next_url)
+
+        session.update({'jugador': jugador,
+                        'equipo':  int(equipo),     # lo guardamos como int
+                        'correo':  correo})
+
+        flash(f'¡Bienvenido {jugador}, equipo #{equipo}!')
         return redirect(next_url)
+
     return render_template('login.html', next=next_url)
 
-@app.route('/preguntas_post_login', methods=['GET', 'POST'])
-def preguntas_post_login():
-    if 'correo' not in session:
-        return redirect('/')
-
-    correo = session['correo']
-    nombre = session['jugador']
-    conn = get_db_connection()
-
-    ya_respondio = conn.execute("SELECT * FROM conexion_alfa_respuestas WHERE correo = ?", (correo,)).fetchone()
-
-    if request.method == 'POST' and not ya_respondio:
-        respuestas = [request.form.get(f'r{i}') or "" for i in range(1, 13)]
-        perfil_ia = generar_perfil_ia(nombre, respuestas)
-
-        conn.execute('''
-            INSERT INTO conexion_alfa_respuestas 
-            (nombre, correo, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, perfil_ia)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (nombre, correo, *respuestas, perfil_ia))
-
-        conn.execute('''
-            INSERT INTO adivina_participantes 
-            (nombre_completo, superpoder, pasion, dato_curioso, pelicula_favorita, actor_favorito, no_soporto,
-             mejor_libro, prenda_imprescindible, mejor_concierto)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            nombre,
-            respuestas[0], respuestas[1], respuestas[2], respuestas[3], respuestas[4],
-            respuestas[5], respuestas[6], respuestas[7], respuestas[8]
-        ))
-
-        conn.commit()
-        conn.close()
-        flash("✅ ¡Gracias! Tu información ha sido registrada.")
-        return redirect('/')
-
-    conn.close()
-    return render_template('preguntas_post_login.html', ya_respondio=ya_respondio)
 
 # -------------------- HOME --------------------
 @app.route('/')
