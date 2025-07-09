@@ -931,49 +931,51 @@ def confirmar_match():
     flash("✅ ¡Gracias por tu respuesta!")
     return redirect('/conexion_alfa_matches')
 
-@app.route('/subir_video_match', methods=['GET', 'POST'])
-def subir_video_match():
+@app.route('/subir_foto_match', methods=['GET', 'POST'])
+def subir_foto_match():
     if 'correo' not in session:
         return redirect('/')
-    
+
     correo = session['correo']
     conn = get_db_connection()
     match = conn.execute('''
         SELECT * FROM conexion_alfa_matches 
-        WHERE (correo_1 = ? OR correo_2 = ?) AND evidencia IS NULL
+        WHERE (correo_1 = ? OR correo_2 = ?)
         LIMIT 1
     ''', (correo, correo)).fetchone()
 
     if not match:
         conn.close()
-        flash("❌ Ya subieron el video o no tienes un match asignado.")
-        return redirect('/conexion_alfa_match')
+        flash("❌ No tienes un match asignado.")
+        return redirect(url_for('conexion_alfa'))
+
+    if match['evidencia']:
+         flash("✅ Este equipo ya subió su foto de evidencia.")
+         return redirect(url_for('conexion_alfa_match'))
 
     if request.method == 'POST':
-        archivo = request.files.get('video')
-        if archivo and archivo.filename.lower().endswith(('.mp4', '.mov', '.avi', '.mkv')):
+        archivo = request.files.get('foto')
+        if archivo and archivo.filename.lower().endswith(('.png', '.jpg', '.jpeg')):
             nombre_archivo = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{archivo.filename}"
             carpeta = os.path.join('static', 'evidencias_alfa')
             os.makedirs(carpeta, exist_ok=True)
             ruta = os.path.join(carpeta, nombre_archivo)
-            
+
             try:
                 archivo.save(ruta)
-                conn.execute('''
-                    UPDATE conexion_alfa_matches
-                    SET evidencia = ?
-                    WHERE id = ?
-                ''', (nombre_archivo, match['id']))
+                conn.execute('UPDATE conexion_alfa_matches SET evidencia = ? WHERE id = ?',
+                             (nombre_archivo, match['id']))
                 conn.commit()
-                flash("✅ Video subido exitosamente.")
-                return redirect('/conexion_alfa_match')
+                flash("✅ ¡Excelente! Foto subida exitosamente.")
+                return redirect(url_for('conexion_alfa_match'))
             except Exception as e:
-                flash(f"❌ Error al guardar el video: {e}")
+                flash(f"❌ Error al guardar la foto: {e}")
         else:
-            flash("❌ Formato de video no válido. Usa mp4, mov, avi o mkv.")
-    
+            flash("❌ Formato de archivo no válido. Usa png, jpg o jpeg.")
+
     conn.close()
-    return render_template('conexion_alfa_subir_video.html', match=match)
+    # Se renderiza una plantilla genérica para subir la foto.
+    return render_template('conexion_alfa_subir_foto.html', match=match)
 
 @app.route('/conexion_alfa_match')
 def conexion_alfa_match():
@@ -1010,15 +1012,15 @@ def api_conexion_alfa_match():
     if not participantes or len(participantes) < 2:
         return jsonify({"error": "No hay suficientes participantes"}), 400
 
-    textos, correos, nombres, perfiles = [], [], [], []
+    textos, correos, nombres, perfiles, respuestas_dict = [], [], [], [], []
 
     for p in participantes:
-        # 🔍 Solo las primeras 7 preguntas
         respuestas = [p.get(f"r{i}", "") or "" for i in range(1, 8)]
         textos.append(" ".join(respuestas))
         correos.append(p["correo"])
         nombres.append(p["nombre"])
         perfiles.append(p.get("perfil_ia", ""))
+        respuestas_dict.append(p) # Guardamos el diccionario completo
 
     vectores = vectorizer_ia.transform(textos).toarray()
 
@@ -1026,29 +1028,51 @@ def api_conexion_alfa_match():
     matches = []
 
     for i in range(len(correos)):
-        if i in usados:
-            continue
+        if i in usados: continue
 
         mejor_j = None
         mejor_sim = -1
 
         for j in range(i + 1, len(correos)):
-            if j in usados:
-                continue
+            if j in usados: continue
             sim = cosine_similarity([vectores[i]], [vectores[j]])[0][0]
             if sim > mejor_sim:
                 mejor_sim = sim
                 mejor_j = j
 
         if mejor_j is not None:
+            p1 = respuestas_dict[i]
+            p2 = respuestas_dict[mejor_j]
+
+            # --- Lógica para encontrar temas en común ---
+            temas_comunes = []
+            if p1.get('r4') and p1['r4'] == p2.get('r4'):
+                temas_comunes.append(f"su película favorita en común: '{p1['r4']}'")
+            if p1.get('r6') and p1['r6'] == p2.get('r6'):
+                temas_comunes.append(f"su gusto por el deporte: '{p1['r6']}'")
+            if p1.get('r2') and p1['r2'] == p2.get('r2'):
+                temas_comunes.append(f"su pasión por '{p1['r2']}'")
+
+            razon_match = f"Tienen una alta compatibilidad ({round(mejor_sim * 100)}%). "
+            if temas_comunes:
+                razon_match += "La IA detectó que coinciden en " + " y ".join(temas_comunes) + "."
+
+            temas_sugeridos = [
+                f"pueden conversar sobre qué es lo que más les gusta de '{p1.get('r4', 'el cine')}'",
+                f"sería un gran tema para romper el hielo hablar de su pasión por '{p1.get('r2', 'sus hobbies')}'",
+                f"podrían compartir su opinión sobre el mejor concierto al que han ido, como el de '{p1.get('r9', 'su artista favorito')}'"
+            ]
+            random.shuffle(temas_sugeridos)
+
+            razon_final = (f"{razon_match}\n\n"
+                           f"**Para romper el hielo:**\n"
+                           f"La IA sugiere que {temas_sugeridos[0]}.")
+
             matches.append({
-                "correo_1": correos[i],
-                "correo_2": correos[mejor_j],
-                "nombre_1": nombres[i],
-                "nombre_2": nombres[mejor_j],
-                "perfil_1": perfiles[i],
-                "perfil_2": perfiles[mejor_j],
-                "razon": f"Coincidencia rápida: {round(mejor_sim * 100)}% de similitud basada en respuestas clave."
+                "correo_1": correos[i], "correo_2": correos[mejor_j],
+                "nombre_1": nombres[i], "nombre_2": nombres[mejor_j],
+                "perfil_1": perfiles[i], "perfil_2": perfiles[mejor_j],
+                "razon": razon_final
             })
             usados.add(i)
             usados.add(mejor_j)

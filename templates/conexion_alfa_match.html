@@ -11,43 +11,24 @@
       margin: 20px auto; max-width: 700px; box-shadow: 0 0 10px rgba(255,255,255,0.1);
     }
     .perfil { font-style: italic; margin-bottom: 15px; }
-    form { margin-top: 20px; }
-    input[type="file"] {
-      padding: 10px; background: #fff; color: #000; border-radius: 6px;
-      display: block; margin-bottom: 10px;
+    .info {
+      background: #2b2d4f; padding: 15px; margin: 20px auto;
+      border-radius: 10px; color: #ccc; font-size: 0.95em;
+      text-align: left; white-space: pre-wrap; /* Para respetar saltos de línea */
     }
     button {
       background: #ec1c24; color: white; padding: 10px 20px;
       border: none; border-radius: 6px; cursor: pointer;
     }
-    .info {
-      background: #2b2d4f;
-      padding: 15px;
-      margin: 20px auto;
-      border-radius: 10px;
-      max-width: 600px;
-      color: #ccc;
-      font-size: 0.95em;
-      text-align: center;
-    }
-    .feedback {
-      text-align: center;
-      margin-top: 20px;
-    }
-    .feedback button {
-      background: transparent;
-      border: none;
-      font-size: 2em;
-      margin: 0 10px;
-      cursor: pointer;
-    }
+    .feedback { text-align: center; margin-top: 20px; }
+    .feedback button { background: transparent; border: none; font-size: 2em; margin: 0 10px; cursor: pointer; }
   </style>
 </head>
 <body>
   <h1>🔗 Tu Conexión Alfa</h1>
 
   {% if sin_match %}
-    <div class="info">
+    <div class="card info">
       ⚠️ Actualmente no tienes una conexión asignada. Serás emparejado/a en cuanto haya otro participante disponible.
     </div>
   {% elif match %}
@@ -58,23 +39,19 @@
 
       {% if match['razon_match'] %}
       <div class="info">
-        🧠 <strong>Razón del match:</strong><br>{{ match['razon_match'] }}
+        🧠 <strong>Razón del match según la IA:</strong><br>{{ match['razon_match'] }}
       </div>
       {% endif %}
 
-      <div class="info">
-        🎯 El video debe mostrar cómo este match puede aportar al liderazgo dentro de la compañía, destacando algún valor de Alfasigma.
-      </div>
-
       {% if not match['evidencia'] %}
-        <form method="POST" action="/subir_video_match" enctype="multipart/form-data">
-          <input type="hidden" name="match_id" value="{{ match['id'] }}">
-          <label>Sube tu video conjunto:</label>
-          <input type="file" name="video" accept="video/*" required>
-          <button type="submit">📤 Enviar evidencia</button>
+        <form method="POST" action="{{ url_for('subir_foto_match') }}" enctype="multipart/form-data">
+          <label>Sube una foto de su encuentro:</label>
+          <input type="file" name="foto" accept="image/*" required>
+          <button type="submit">📤 Enviar Evidencia</button>
         </form>
       {% else %}
-        <p style="color: lightgreen;">✅ Video ya enviado por este equipo.</p>
+        <p style="color: lightgreen;">✅ Foto de evidencia ya enviada por este equipo.</p>
+        <img src="{{ url_for('static', filename='evidencias_alfa/' ~ match.evidencia) }}" style="max-width: 100%; border-radius: 8px; margin-top: 10px;">
       {% endif %}
 
       {% if feedback_dado is none %}

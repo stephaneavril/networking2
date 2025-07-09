@@ -98,10 +98,7 @@
 
     <select id="respuesta">
       <option value="" disabled selected>🎭 ¿Quién crees que es?</option>
-      {% for p in participantes %}
-        <option value="{{ p.nombre_completo }}">{{ p.nombre_completo }}</option>
-      {% endfor %}
-    </select>
+      </select>
 
     <br>
     <button onclick="verificar()">Responder</button>
@@ -110,62 +107,87 @@
   </div>
 
   <script>
-    let participantes = {{ participantes|tojson }};
-    participantes = participantes.sort(() => 0.5 - Math.random()).slice(0, 15);
+    // --- NUEVA LÓGICA ---
+    
+    // 1. Guardamos a TODOS los participantes y luego elegimos 15 para jugar.
+    const todosLosParticipantes = {{ participantes|tojson }};
+    const participantesParaJugar = todosLosParticipantes.sort(() => 0.5 - Math.random()).slice(0, 15);
 
-    let indices_restantes = participantes.map((_, i) => i);
+    let indiceActual = 0; // Para saber qué tarjeta mostrar
     let actual;
     let aciertos = 0;
     let puntaje = 0;
     let tiempoRestante = 900; // 15 minutos
     let temporizadorIntervalo;
 
+    // Claves para generar las pistas de forma aleatoria.
     const frases_keys = [
       ["dato_curioso", "🧠 Dato curioso"],
       ["pelicula_favorita", "🎬 Película favorita"],
-      ["no_soporto", "🤢 No soporta"],
       ["prenda_imprescindible", "👕 Prenda imprescindible"],
       ["mejor_concierto", "🎤 Concierto"],
       ["pasion", "🎶 Pasión"]
     ];
 
     function mostrarFrase() {
-      if (aciertos === 15) { finalizarJuego(); return; }
-      if (indices_restantes.length === 0) {
+      // Si ya se adivinaron los 15, termina el juego.
+      if (indiceActual >= participantesParaJugar.length) {
         finalizarJuego();
         return;
       }
 
-      const idx = Math.floor(Math.random() * indices_restantes.length);
-      const i = indices_restantes[idx];
-      actual = participantes[i];
-      indices_restantes.splice(idx, 1);
+      actual = participantesParaJugar[indiceActual];
 
+      // --- Generación dinámica del menú desplegable ---
+      const nombreCorrecto = actual.nombre_completo;
+      
+      // Filtramos para obtener 14 nombres incorrectos al azar.
+      const opcionesIncorrectas = todosLosParticipantes
+        .filter(p => p.nombre_completo !== nombreCorrecto)
+        .sort(() => 0.5 - Math.random())
+        .slice(0, 14)
+        .map(p => p.nombre_completo);
+
+      // Creamos la lista final de 15, la barajamos y la mostramos.
+      let opcionesFinales = [...opcionesIncorrectas, nombreCorrecto];
+      opcionesFinales = opcionesFinales.sort(() => 0.5 - Math.random());
+      
+      const selectRespuesta = document.getElementById("respuesta");
+      selectRespuesta.innerHTML = '<option value="" disabled selected>🎭 ¿Quién crees que es?</option>'; // Limpiamos y ponemos la opción por defecto
+      opcionesFinales.forEach(nombre => {
+        const option = document.createElement("option");
+        option.value = nombre;
+        option.textContent = nombre;
+        selectRespuesta.appendChild(option);
+      });
+      // --- Fin de la generación del menú ---
+
+
+      // Mostramos 3 pistas aleatorias para la persona actual.
       const seleccionadas = frases_keys.sort(() => 0.5 - Math.random()).slice(0, 3);
       let pistas = "";
       for (const [clave, etiqueta] of seleccionadas) {
-        pistas += `<p><strong>${etiqueta}:</strong> ${actual[clave]}</p>`;
+        if(actual[clave]) {
+          pistas += `<p><strong>${etiqueta}:</strong> ${actual[clave]}</p>`;
+        }
       }
 
       document.getElementById("contenido").innerHTML = pistas;
-      document.getElementById("respuesta").value = "";
       document.getElementById("resultado").innerText = "";
     }
 
     function verificar() {
-      const seleccion = document.getElementById("respuesta").value.trim().toLowerCase();
-      const correcto = actual.nombre_completo.trim().toLowerCase();
+      const seleccion = document.getElementById("respuesta").value;
+      const correcto = actual.nombre_completo;
 
       if (seleccion === correcto) {
         document.getElementById("resultado").innerText = "✅ ¡Correcto!";
         aciertos++;
         puntaje += 10;
-
-        // Eliminar nombre del selector
-        const optionToRemove = document.querySelector(`#respuesta option[value="${actual.nombre_completo}"]`);
-        if (optionToRemove) optionToRemove.remove();
-
         document.getElementById("puntaje").innerText = `Puntaje: ${puntaje}`;
+        
+        // Pasamos a la siguiente persona
+        indiceActual++;
         setTimeout(mostrarFrase, 1000);
       } else {
         document.getElementById("resultado").innerText = "❌ Incorrecto, intenta con otro nombre.";
