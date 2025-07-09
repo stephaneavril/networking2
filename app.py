@@ -150,27 +150,33 @@ def adivina_finalizado():
     if 'jugador' not in session:
         return jsonify({"error": "No autenticado"}), 401
 
-    data = request.get_json()
-    jugador = session['jugador']
-    puntaje = data.get("puntaje", 0)
+    data     = request.get_json()
+    jugador  = session['jugador']
+    puntaje  = data.get("puntaje", 0)
+    aciertos = data.get("aciertos", 0)
 
-    if not isinstance(puntaje, int):
+    # Validaciones básicas
+    if not isinstance(puntaje, int) or not isinstance(aciertos, int):
         return jsonify({"error": "Datos inválidos"}), 400
 
-    conn = get_db_connection()
+    conn   = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM adivina_resultados WHERE nombre_jugador = ?", (jugador,))
-    if cursor.fetchone():
+
+    # Evitar doble registro
+    if cursor.execute("SELECT 1 FROM adivina_resultados WHERE nombre_jugador = ?",
+                      (jugador,)).fetchone():
         conn.close()
         return jsonify({"error": "Ya has completado el reto"}), 400
 
-    cursor.execute("INSERT INTO adivina_resultados (nombre_jugador, aciertos, puntos_extra) VALUES (?, ?, ?)",
-                   (jugador, 0, puntaje))
+    cursor.execute("""
+        INSERT INTO adivina_resultados (nombre_jugador, aciertos, puntos_extra)
+        VALUES (?,?,?)
+    """, (jugador, aciertos, puntaje))
     conn.commit()
     conn.close()
 
     return jsonify({
-        "message": f"🎉 ¡Reto completado! {jugador} obtuvo {puntaje} puntos.",
+        "message": f"🎉 ¡Reto completado! {jugador} acertó {aciertos} nombre(s) y obtuvo {puntaje} pts.",
         "redirect": "/ranking_adivina"
     })
 
@@ -226,11 +232,11 @@ def ranking_adivina():
     if 'jugador' not in session:
         return redirect('/')
     conn = get_db_connection()
-    resultados = conn.execute('''
-        SELECT nombre_jugador, puntos_extra, timestamp
+    resultados = conn.execute("""
+        SELECT nombre_jugador, aciertos, puntos_extra, timestamp
         FROM adivina_resultados
-        ORDER BY puntos_extra DESC, timestamp ASC
-    ''').fetchall()
+        ORDER BY aciertos DESC, puntos_extra DESC, timestamp ASC
+    """).fetchall()
     mi_resultado = conn.execute("SELECT * FROM adivina_resultados WHERE nombre_jugador = ?", (session['jugador'],)).fetchone()
     conn.close()
     return render_template('ranking_adivina.html', resultados=resultados, mi_resultado=mi_resultado)

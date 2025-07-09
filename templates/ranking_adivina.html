@@ -11,28 +11,23 @@
       text-align: center;
       padding: 30px;
     }
-
     table {
       margin: 0 auto;
       border-collapse: collapse;
       width: 90%;
     }
-
     th, td {
       padding: 12px;
       border-bottom: 1px solid #444;
     }
-
     th {
-      background-color: #ec1c24;
+      background-color: #ec1c24;   /* cámbialo luego a púrpura AZ */
       color: white;
     }
-
     tr.highlight {
       background-color: #1f2140;
       font-weight: bold;
     }
-
     a {
       color: #ec1c24;
       text-decoration: none;
@@ -40,14 +35,17 @@
   </style>
 </head>
 <body>
-  <h1>🏆 Ranking - Adivina Quién</h1>
+  <h1>🏆 Ranking – Adivina Quién</h1>
 
   <table>
     <thead>
+      <!-- ⬇️ NUEVO: añadimos columnas Aciertos y Bonus -->
       <tr>
         <th>Posición</th>
         <th>Nombre</th>
-        <th>Puntaje Final</th>
+        <th>Aciertos</th>
+        <th>Bonus</th>
+        <th>Total</th>
       </tr>
     </thead>
     <tbody>
@@ -55,12 +53,13 @@
       <tr {% if r['nombre_jugador'] == mi_resultado['nombre_jugador'] %}class="highlight"{% endif %}>
         <td>{{ loop.index }}</td>
         <td>{{ r['nombre_jugador'] }}</td>
+        <td>{{ r['aciertos'] }}</td>
         <td>{{ r['puntos_extra'] }}</td>
+        <!-- Total = aciertos + bonus -->
+        <td>{{ r['aciertos'] + r['puntos_extra'] }}</td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
 
-  <p style="margin-top: 20px;"><a href="/">← Volver al menú</a></p>
-</body>
-</html>
+  <p style="margin-to

@@ -92,7 +92,7 @@
   <h1>🎬 Adivina Quién - El Casting</h1>
 
   <div class="tarjeta">
-    <div id="timer">⏳ Tiempo restante: 20:00</div>
+    <div id="timer">⏳ Tiempo restante: 15:00</div>
     <div id="advertencia">⚠️ ¡Quedan solo 2 minutos! Adivina rápido...</div>
     <div id="contenido"></div>
 
@@ -111,13 +111,13 @@
 
   <script>
     let participantes = {{ participantes|tojson }};
-    participantes = participantes.sort(() => 0.5 - Math.random()).slice(0, 12);
+    participantes = participantes.sort(() => 0.5 - Math.random()).slice(0, 15);
 
     let indices_restantes = participantes.map((_, i) => i);
     let actual;
     let aciertos = 0;
     let puntaje = 0;
-    let tiempoRestante = 1200; // 20 minutos
+    let tiempoRestante = 900; // 15 minutos
     let temporizadorIntervalo;
 
     const frases_keys = [
@@ -130,6 +130,7 @@
     ];
 
     function mostrarFrase() {
+      if (aciertos === 15) { finalizarJuego(); return; }
       if (indices_restantes.length === 0) {
         finalizarJuego();
         return;
