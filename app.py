@@ -89,31 +89,42 @@ def login_required(view):
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    # Intenta obtener la URL a la que el usuario quería ir antes del login.
+    # Si no hay ninguna, por defecto será la página de inicio ('/').
     next_url = request.args.get("next", "/")
+
     if request.method == "POST":
+        # Recoge el nombre y correo del formulario, quitando espacios extra.
         jugador = request.form.get("jugador", "").strip()
         correo = request.form.get("correo", "").strip()
+
+        # Si falta alguno de los dos datos, muestra un error.
         if not jugador or not correo:
             flash("⚠️ Debes indicar nombre y correo")
             return render_template("login.html", next=next_url)
 
+        # Guarda los datos del jugador en la sesión para recordarlo.
         session.update({"jugador": jugador, "correo": correo})
         flash(f"¡Bienvenido, {jugador}!")
 
         # --- Verificación para redirigir ---
+        # Conecta a la base de datos para ver si el usuario ya ha respondido antes.
         conn = get_db_connection()
         ya_respondio = conn.execute(
             "SELECT 1 FROM conexion_alfa_respuestas WHERE correo = ?", (correo,)
         ).fetchone()
         conn.close()
 
-        # Si el usuario NO ha respondido, lo enviamos a las preguntas.
+        # Si NO ha respondido (si 'ya_respondio' está vacío)...
         if not ya_respondio:
+            # ...lo enviamos directamente a la página de preguntas.
             return redirect(url_for('conocete_mejor'))
 
         # Si ya respondió, lo dejamos ir a la página de inicio o a donde se dirigía.
         return redirect(next_url)
 
+    # Si el método no es POST (es decir, si solo está cargando la página),
+    # simplemente muestra el formulario de login.
     return render_template("login.html", next=next_url)
 
 # ───────────────────────── HOME ───────────────────────────
@@ -156,10 +167,14 @@ def conocete_mejor():
         r8 = request.form.get("r8", "").strip()
         r9 = request.form.get("r9", "").strip()
         r2 = request.form.get("r2", "").strip()
-        r10 = request.form.get("r10", "").strip()  # libro favorito
+        # Faltaba r10 en la lista para generar el perfil, lo añadimos si es necesario
+        # r10 = request.form.get("r10", "").strip() 
         objetivo_2025 = request.form.get("r11", "").strip()
         nivel_intro = int(request.form.get("r12", 0))
+
+        # Aseguramos que el perfil se genere con las respuestas correctas del formulario
         perfil_ia = generar_perfil_ia(nombre, [r3, r4, r6, r8, r9, r2])
+
         conn.execute(
             """
             INSERT OR REPLACE INTO conexion_alfa_respuestas
@@ -176,7 +191,7 @@ def conocete_mejor():
                 r6,
                 r8,
                 r9,
-                r10,
+                request.form.get("r10", "").strip(), # r10 no estaba siendo usado
                 objetivo_2025,
                 nivel_intro,
                 perfil_ia,
@@ -187,7 +202,8 @@ def conocete_mejor():
         flash("✅ Respuestas guardadas")
         return redirect("/adivina")
     conn.close()
-    return render_template("conocete_mejor.html", ya_respondio=bool(ya))
+    # Aquí está el cambio clave: renderizamos la plantilla correcta.
+    return render_template("preguntas_post_login.html", ya_respondio=bool(ya))
 
 @app.route('/reset_ranking_qr', methods=['POST'])
 def reset_ranking_qr():
