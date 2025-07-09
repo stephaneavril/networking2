@@ -355,34 +355,41 @@ def reset_adivina_participantes():
 
 @app.route('/generar_contenido_adivina', methods=['POST'])
 def generar_contenido_adivina():
+    conn = get_db_connection()
     try:
-        conn = get_db_connection()
-        conn.row_factory = sqlite3.Row
-        participantes = conn.execute('SELECT * FROM adivina_participantes').fetchall()
+        # 1. Lee a los participantes que llenaron el cuestionario
+        respuestas = conn.execute('SELECT * FROM conexion_alfa_respuestas').fetchall()
+
+        if not respuestas:
+            flash("❌ Aún no hay participantes que hayan respondido el cuestionario.")
+            return redirect('/admin_panel')
+
+        # 2. Borra los datos anteriores para no duplicar
+        conn.execute("DELETE FROM adivina_participantes")
+
+        # 3. Inserta los participantes en la tabla del juego
+        for r in respuestas:
+            conn.execute("""
+                INSERT INTO adivina_participantes (
+                    nombre_completo, pasion, dato_curioso, pelicula_favorita,
+                    deporte_favorito, prenda_imprescindible, mejor_concierto, 
+                    mejor_libro, objetivo_2025
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                r['nombre'], r['r2'], r['r3'], r['r4'], r['r6'], 
+                r['r8'], r['r9'], r['r10'], r['objetivo_2025']
+            ))
+
+        conn.commit()
+
+        num_participantes = len(respuestas)
+        flash(f"✅ ¡Éxito! Se cargaron {num_participantes} participantes al juego.")
+
+    except Exception as e:
+        flash(f"❌ Ocurrió un error al generar el contenido: {e}")
+    finally:
         conn.close()
 
-        datos = []
-        for p in participantes:
-            datos.append({
-                "nombre_completo": p["nombre_completo"],
-                "superpoder": p["superpoder"],
-                "pasion": p["pasion"],
-                "dato_curioso": p["dato_curioso"],
-                "pelicula_favorita": p["pelicula_favorita"],
-                "actor_favorito": p["actor_favorito"],
-                "deporte_favorito": p["deporte_favorito"],
-                "mejor_libro": p["mejor_libro"],
-                "prenda_imprescindible": p["prenda_imprescindible"],
-                "mejor_concierto": p["mejor_concierto"],
-                "objetivo_2025":    p["objetivo_2025"], 
-            })
-
-        with open('contenido_adivina.json', 'w', encoding='utf-8') as f:
-            json.dump(datos, f, indent=2, ensure_ascii=False)
-
-        flash(f"✅ Se generó el contenido de Adivina Quién con {len(datos)} participantes.")
-    except Exception as e:
-        flash(f"❌ Error generando contenido: {e}")
     return redirect('/admin_panel')
 
 @app.route('/respuestas_curiosas')
