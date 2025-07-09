@@ -112,7 +112,7 @@
 <body>
 
 <header>
-  <img src="{{ url_for('static', filename='images/astrazeneca_logo.svg') }}" alt="AstraZeneca" style="max-height: 60px; vertical-align: middle;">
+  <img src="{{ url_for('static', filename='images/astrazeneca.png') }}" alt="AstraZeneca" style="max-height: 60px; vertical-align: middle;">
   <span style="margin-left: 10px;">ASTRAZENECA CHALLENGE</span>
 </header>
 
@@ -168,14 +168,7 @@
     {% endfor %}
   </div>
 
-  {# El ranking de escaneo QR siempre visible #}
-  <div class="card" style="margin-top: 30px;" onclick="window.open('/ranking_qr', '_blank')">
-    <div class="badge">📲</div>
-    <h3>Ranking Escaneo QR</h3>
-    <p style="margin-top:10px;">Haz clic para ver el ranking en tiempo real</p>
-  </div>
-</div>
-
+  
 <footer>
   &copy; 2025 TEAMS | <a href="https://teams.com.mx">teams.com.mx</a>
 </footer>
