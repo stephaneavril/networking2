@@ -1,57 +1,71 @@
 import random, os, sqlite3, pickle, json, numpy as np
 from datetime import datetime
-from functools import wraps                 # <- nuevo
+from functools import wraps
 from flask import (
     Flask, render_template, request, jsonify,
-    session, redirect, flash, url_for        # <- url_for lo usa login_required
+    session, redirect, flash, url_for
 )
 from sklearn.metrics.pairwise import cosine_similarity
 from werkzeug.utils import secure_filename
 
-# Cargar el modelo y vectorizador IA
+# ───────────────────────── CONFIG ─────────────────────────
 with open("modelo_conexion_alfa.pkl", "rb") as f:
     modelo_ia = pickle.load(f)
-
 with open("vectorizer_conexion_alfa.pkl", "rb") as f:
     vectorizer_ia = pickle.load(f)
 
 app = Flask(__name__)
-app.secret_key = 'clave-segura'
-app.config['UPLOAD_FOLDER'] = 'evidencias'
-app.config['UPLOAD_FOLDER_GRUPAL'] = 'evidencias_reto_grupal'
+app.secret_key = "clave-segura"
+app.config.update({
+    "UPLOAD_FOLDER": "evidencias",
+    "UPLOAD_FOLDER_GRUPAL": "evidencias_reto_grupal"
+})
+
+# ─────────────────────── DB HELPERS ───────────────────────
 
 def get_db_connection():
-    conn = sqlite3.connect('database.db')
+    conn = sqlite3.connect("database.db")
     conn.row_factory = sqlite3.Row
     return conn
 
-# ---------- AUTO-MIGRACIÓN ESQUEMA ----------
-def ensure_schema():
-    """Crea columna reto_no e índice único si aún no existen."""
-    conn = sqlite3.connect('database.db')
-    cur  = conn.cursor()
+# Autopatch de esquema (reto_equipo_foto)
 
-    # ¿la columna reto_no ya está?
-    columnas = [c[1] for c in cur.execute("PRAGMA table_info(reto_equipo_foto)")]
-    if 'reto_no' not in columnas:
+def ensure_schema():
+    conn = sqlite3.connect("database.db")
+    cur = conn.cursor()
+    cols = [c[1] for c in cur.execute("PRAGMA table_info(reto_equipo_foto)")]
+    if "reto_no" not in cols:
         cur.execute("ALTER TABLE reto_equipo_foto ADD COLUMN reto_no INTEGER DEFAULT 1")
         print("✓ Columna reto_no añadida automáticamente")
-
-    # índice (evita 2 fotos mismo equipo-reto)
-    cur.execute("""
+    cur.execute(
+        """
         CREATE UNIQUE INDEX IF NOT EXISTS uniq_reto_equipo
         ON reto_equipo_foto(equipo, reto_no)
-    """)
-    conn.commit(); conn.close()
+        """
+    )
+    conn.commit()
+    conn.close()
 
-# Ejecuta la verificación una sola vez al levantar la app
 ensure_schema()
 
 def generar_perfil_ia(nombre, respuestas):
     frases = [
         f"🧠 {nombre} tiene un dato curioso: '{respuestas[0]}'.",
         f"🎬 Su película favorita es '{respuestas[1]}'.",
-        f"🤢 No soporta: '{respuestas[2]}'.",
+        f"🏀 Deporte favorito: '{respuestas[2]}'.",
+        f"👕 No podría vivir sin: '{respuestas[3]}'.",
+        f"🎤 El mejor concierto que ha vivido fue: '{respuestas[4]}'.",
+        f"🎶 Y fuera del trabajo le apasiona: '{respuestas[5]}'.",
+    ]
+    return " ".join(frases)
+
+# ──────────────────────── UTILIDADES ──────────────────────
+
+def generar_perfil_ia(nombre: str, respuestas: list[str]) -> str:
+    frases = [
+        f"🧠 {nombre} tiene un dato curioso: '{respuestas[0]}'.",
+        f"🎬 Su película favorita es '{respuestas[1]}'.",
+        f"🏀 Deporte favorito: '{respuestas[2]}'.",
         f"👕 No podría vivir sin: '{respuestas[3]}'.",
         f"🎤 El mejor concierto que ha vivido fue: '{respuestas[4]}'.",
         f"🎶 Y fuera del trabajo le apasiona: '{respuestas[5]}'.",
@@ -63,66 +77,102 @@ def make_session_permanent():
     session.permanent = True
 
 def login_required(view):
-    """Redirige a /login?next=… si el jugador o equipo no están en sesión"""
     @wraps(view)
     def wrapped(*args, **kwargs):
-        if 'jugador' not in session or 'equipo' not in session:
-            return redirect(url_for('login', next=request.path))
+        if "jugador" not in session:
+            return redirect(url_for("login", next=request.path))
         return view(*args, **kwargs)
     return wrapped
 
-@app.route('/login', methods=['GET', 'POST'])
+
+# ───────────────────────── LOGIN ──────────────────────────
+
+@app.route("/login", methods=["GET", "POST"])
 def login():
-    next_url = request.args.get('next', '/')
-
-    if request.method == 'POST':
-        jugador = request.form['jugador'].strip()
-        equipo  = request.form['equipo'].strip()   # ← seguirá llamándose equipo
-        correo  = request.form['correo'].strip()
-
-        # ✅ Nueva validación: equipo numérico positivo
-        if not equipo.isdigit() or int(equipo) <= 0:
-            flash('⚠️ El número de equipo debe ser un entero positivo')
-            return render_template('login.html', next=next_url)
-
+    next_url = request.args.get("next", "/")
+    if request.method == "POST":
+        jugador = request.form.get("jugador", "").strip()
+        correo = request.form.get("correo", "").strip()
         if not jugador or not correo:
-            flash('⚠️ Debes escribir tu nombre y correo')
-            return render_template('login.html', next=next_url)
-
-        session.update({'jugador': jugador,
-                        'equipo':  int(equipo),     # lo guardamos como int
-                        'correo':  correo})
-
-        flash(f'¡Bienvenido {jugador}, equipo #{equipo}!')
+            flash("⚠️ Debes indicar nombre y correo")
+            return render_template("login.html", next=next_url)
+        session.update({"jugador": jugador, "correo": correo})
+        flash(f"¡Bienvenido, {jugador}!")
         return redirect(next_url)
+    return render_template("login.html", next=next_url)
 
-    return render_template('login.html', next=next_url)
+# ───────────────────────── HOME ───────────────────────────
 
-
-# -------------------- HOME --------------------
-@app.route('/')
+@app.route("/")
 def index():
-    if 'jugador' not in session:
-        return redirect('/login')  # 🔁 CORREGIDO: antes decía redirect('/'), causaba bucle
-
+    if "jugador" not in session:
+        return redirect("/login")
     conn = get_db_connection()
     retos = conn.execute("SELECT * FROM retos WHERE activo = 1").fetchall()
     conn.close()
-
-    modo_foto_equipo = False
-
-    # QR scan ranking
-    qr_conn = sqlite3.connect('scan_points.db')
+    qr_conn = sqlite3.connect("scan_points.db")
     qr_conn.row_factory = sqlite3.Row
-    ranking_qr = qr_conn.execute('''
+    ranking_qr = qr_conn.execute(
+        """
         SELECT nombre, SUM(puntos) AS total
         FROM registros
         GROUP BY nombre
         ORDER BY total DESC
-    ''').fetchall()
+        """
+    ).fetchall()
     qr_conn.close()
+    return render_template("index.html", retos=retos, ranking_qr=ranking_qr, modo_foto_equipo=False)
 
-    return render_template('index.html', retos=retos, ranking_qr=ranking_qr, modo_foto_equipo=modo_foto_equipo)
+# ───────────────────── RETO “CONÓCETE” ───────────────────
+
+@app.route("/conocete_mejor", methods=["GET", "POST"])
+@login_required
+def conocete_mejor():
+    correo = session["correo"]
+    nombre = session["jugador"]
+    conn = get_db_connection()
+    ya = conn.execute(
+        "SELECT 1 FROM conexion_alfa_respuestas WHERE correo=?", (correo,)
+    ).fetchone()
+    if request.method == "POST":
+        r3 = request.form.get("r3", "").strip()
+        r4 = request.form.get("r4", "").strip()
+        r6 = request.form.get("r6", "").strip()  # deporte favorito
+        r8 = request.form.get("r8", "").strip()
+        r9 = request.form.get("r9", "").strip()
+        r2 = request.form.get("r2", "").strip()
+        r10 = request.form.get("r10", "").strip()  # libro favorito
+        objetivo_2025 = request.form.get("r11", "").strip()
+        nivel_intro = int(request.form.get("r12", 0))
+        perfil_ia = generar_perfil_ia(nombre, [r3, r4, r6, r8, r9, r2])
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO conexion_alfa_respuestas
+            (correo, nombre, r2, r3, r4, r6, r8, r9, r10,
+             objetivo_2025, nivel_introversion, perfil_ia)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                correo,
+                nombre,
+                r2,
+                r3,
+                r4,
+                r6,
+                r8,
+                r9,
+                r10,
+                objetivo_2025,
+                nivel_intro,
+                perfil_ia,
+            ),
+        )
+        conn.commit()
+        conn.close()
+        flash("✅ Respuestas guardadas")
+        return redirect("/adivina")
+    conn.close()
+    return render_template("conocete_mejor.html", ya_respondio=bool(ya))
 
 @app.route('/reset_ranking_qr', methods=['POST'])
 def reset_ranking_qr():
@@ -276,10 +326,11 @@ def generar_contenido_adivina():
                 "dato_curioso": p["dato_curioso"],
                 "pelicula_favorita": p["pelicula_favorita"],
                 "actor_favorito": p["actor_favorito"],
-                "no_soporto": p["no_soporto"],
+                "deporte_favorito": p["deporte_favorito"],
                 "mejor_libro": p["mejor_libro"],
                 "prenda_imprescindible": p["prenda_imprescindible"],
-                "mejor_concierto": p["mejor_concierto"]
+                "mejor_concierto": p["mejor_concierto"],
+                "objetivo_2025":    p["objetivo_2025"], 
             })
 
         with open('contenido_adivina.json', 'w', encoding='utf-8') as f:
@@ -303,11 +354,11 @@ def respuestas_curiosas():
             f"🎶 Pasión: {r['pasion']}",
             f"🧠 Dato curioso: {r['dato_curioso']}",
             f"🎬 Película favorita: {r['pelicula_favorita']}",
-            f"🎤 Concierto: {r['mejor_concierto']}",
-            f"📖 Libro favorito: {r['mejor_libro']}",
-            f"👕 Prenda imprescindible: {r['prenda_imprescindible']}",
-            f"🤢 No soporta: {r['no_soporto']}"
-        ]
+        f"🎤 Concierto: {r['mejor_concierto']}",
+    f"📖 Libro favorito: {r['mejor_libro']}",
+    f"🏀 Deporte favorito: {r['deporte_favorito']}",
+    f"🎯 Objetivo 2025: {r['objetivo_2025']}"
+]
         seleccionadas = random.sample(frases, 3)
         destacados.append({
             "nombre": r["nombre_completo"],
