@@ -157,53 +157,53 @@ def conocete_mejor():
     correo = session["correo"]
     nombre = session["jugador"]
     conn = get_db_connection()
-    ya = conn.execute(
+    ya_respondio = conn.execute(
         "SELECT 1 FROM conexion_alfa_respuestas WHERE correo=?", (correo,)
     ).fetchone()
+
     if request.method == "POST":
-        r3 = request.form.get("r3", "").strip()
-        r4 = request.form.get("r4", "").strip()
-        r6 = request.form.get("r6", "").strip()  # deporte favorito
-        r8 = request.form.get("r8", "").strip()
-        r9 = request.form.get("r9", "").strip()
-        r2 = request.form.get("r2", "").strip()
-        # Faltaba r10 en la lista para generar el perfil, lo añadimos si es necesario
-        # r10 = request.form.get("r10", "").strip() 
-        objetivo_2025 = request.form.get("r11", "").strip()
-        nivel_intro = int(request.form.get("r12", 0))
+        try:
+            r3 = request.form.get("r3", "").strip()
+            r4 = request.form.get("r4", "").strip()
+            r6 = request.form.get("r6", "").strip()
+            r8 = request.form.get("r8", "").strip()
+            r9 = request.form.get("r9", "").strip()
+            r2 = request.form.get("r2", "").strip()
+            r10 = request.form.get("r10", "").strip()
+            objetivo_2025 = request.form.get("r11", "").strip()
+            
+            r12_val = request.form.get("r12")
+            nivel_intro = int(r12_val) if r12_val and r12_val.isdigit() else 0
 
-        # Aseguramos que el perfil se genere con las respuestas correctas del formulario
-        perfil_ia = generar_perfil_ia(nombre, [r3, r4, r6, r8, r9, r2])
+            perfil_ia = generar_perfil_ia(nombre, [r3, r4, r6, r8, r9, r2])
+            
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO conexion_alfa_respuestas
+                (correo, nombre, r2, r3, r4, r6, r8, r9, r10,
+                 objetivo_2025, nivel_introversion, perfil_ia)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    correo, nombre, r2, r3, r4, r6, r8, r9, r10,
+                    objetivo_2025, nivel_intro, perfil_ia
+                ),
+            )
+            conn.commit()
+            flash("✅ Respuestas guardadas")
+            
+            # --- AQUÍ ESTÁ EL CAMBIO ---
+            # Ahora redirige a la página principal ('index')
+            return redirect(url_for('index'))
 
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO conexion_alfa_respuestas
-            (correo, nombre, r2, r3, r4, r6, r8, r9, r10,
-             objetivo_2025, nivel_introversion, perfil_ia)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-            """,
-            (
-                correo,
-                nombre,
-                r2,
-                r3,
-                r4,
-                r6,
-                r8,
-                r9,
-                request.form.get("r10", "").strip(), # r10 no estaba siendo usado
-                objetivo_2025,
-                nivel_intro,
-                perfil_ia,
-            ),
-        )
-        conn.commit()
-        conn.close()
-        flash("✅ Respuestas guardadas")
-        return redirect("/adivina")
+        except Exception as e:
+            flash(f"❌ Ocurrió un error al guardar tus respuestas: {e}")
+            return redirect(url_for('conocete_mejor'))
+        finally:
+            conn.close()
+
     conn.close()
-    # Aquí está el cambio clave: renderizamos la plantilla correcta.
-    return render_template("preguntas_post_login.html", ya_respondio=bool(ya))
+    return render_template("preguntas_post_login.html", ya_respondio=bool(ya_respondio))
 
 @app.route('/reset_ranking_qr', methods=['POST'])
 def reset_ranking_qr():
