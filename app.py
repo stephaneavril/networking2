@@ -154,29 +154,41 @@ def index():
 @app.route("/conocete_mejor", methods=["GET", "POST"])
 @login_required
 def conocete_mejor():
-    correo = session["correo"]
-    nombre = session["jugador"]
-    conn = get_db_connection()
-    ya_respondio = conn.execute(
-        "SELECT 1 FROM conexion_alfa_respuestas WHERE correo=?", (correo,)
-    ).fetchone()
+    # Si la petición es para mostrar la página, primero vemos si el usuario ya respondió.
+    if request.method == "GET":
+        conn = get_db_connection()
+        ya_respondio = conn.execute(
+            "SELECT 1 FROM conexion_alfa_respuestas WHERE correo = ?", (session["correo"],)
+        ).fetchone()
+        conn.close()
+        return render_template("preguntas_post_login.html", ya_respondio=bool(ya_respondio))
 
+    # Si la petición es para enviar datos (POST)
     if request.method == "POST":
+        conn = get_db_connection()
         try:
+            # --- Recolección y limpieza de datos ---
+            nombre = session["jugador"]
+            correo = session["correo"]
+            
+            # Obtenemos todos los campos de texto, asegurando que no fallen si no existen.
+            r2 = request.form.get("r2", "").strip()
             r3 = request.form.get("r3", "").strip()
             r4 = request.form.get("r4", "").strip()
             r6 = request.form.get("r6", "").strip()
             r8 = request.form.get("r8", "").strip()
             r9 = request.form.get("r9", "").strip()
-            r2 = request.form.get("r2", "").strip()
-            r10 = request.form.get("r10", "").strip()
+            r10 = request.form.get("r10", "").strip() # Libro favorito
             objetivo_2025 = request.form.get("r11", "").strip()
-            
-            r12_val = request.form.get("r12")
-            nivel_intro = int(r12_val) if r12_val and r12_val.isdigit() else 0
 
+            # --- Conversión segura del número (previene el error más común) ---
+            nivel_intro_str = request.form.get("r12", "0").strip()
+            nivel_intro = int(nivel_intro_str) if nivel_intro_str.isdigit() else 0
+
+            # Generamos el perfil con IA
             perfil_ia = generar_perfil_ia(nombre, [r3, r4, r6, r8, r9, r2])
-            
+
+            # Insertamos en la base de datos
             conn.execute(
                 """
                 INSERT OR REPLACE INTO conexion_alfa_respuestas
@@ -190,20 +202,21 @@ def conocete_mejor():
                 ),
             )
             conn.commit()
-            flash("✅ Respuestas guardadas")
+            flash("✅ ¡Respuestas guardadas con éxito!")
             
-            # --- AQUÍ ESTÁ EL CAMBIO ---
-            # Ahora redirige a la página principal ('index')
+            # --- Redirección final a la página de inicio ---
             return redirect(url_for('index'))
 
         except Exception as e:
-            flash(f"❌ Ocurrió un error al guardar tus respuestas: {e}")
+            # Si algo falla, imprimimos el error en la consola para depuración
+            # y mostramos un mensaje claro al usuario.
+            print(f"HA OCURRIDO UN ERROR: {e}")
+            flash(f"❌ Error al guardar: Revisa que todos los campos estén llenos.")
             return redirect(url_for('conocete_mejor'))
+        
         finally:
+            # Pase lo que pase, cerramos la conexión a la BD.
             conn.close()
-
-    conn.close()
-    return render_template("preguntas_post_login.html", ya_respondio=bool(ya_respondio))
 
 @app.route('/reset_ranking_qr', methods=['POST'])
 def reset_ranking_qr():
