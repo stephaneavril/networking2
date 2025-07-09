@@ -96,9 +96,24 @@ def login():
         if not jugador or not correo:
             flash("⚠️ Debes indicar nombre y correo")
             return render_template("login.html", next=next_url)
+
         session.update({"jugador": jugador, "correo": correo})
         flash(f"¡Bienvenido, {jugador}!")
+
+        # --- Verificación para redirigir ---
+        conn = get_db_connection()
+        ya_respondio = conn.execute(
+            "SELECT 1 FROM conexion_alfa_respuestas WHERE correo = ?", (correo,)
+        ).fetchone()
+        conn.close()
+
+        # Si el usuario NO ha respondido, lo enviamos a las preguntas.
+        if not ya_respondio:
+            return redirect(url_for('conocete_mejor'))
+
+        # Si ya respondió, lo dejamos ir a la página de inicio o a donde se dirigía.
         return redirect(next_url)
+
     return render_template("login.html", next=next_url)
 
 # ───────────────────────── HOME ───────────────────────────
