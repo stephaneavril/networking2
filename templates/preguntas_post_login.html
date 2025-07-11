@@ -59,34 +59,47 @@
       <h1>✅ Ya respondiste estas preguntas</h1>
       <p>Puedes ver tu perfil <a href="/conexion_alfa_mi_perfil">aquí</a>.</p>
     {% else %}
-      <h1>🧠 Conócete Mejor</h1>
-      <form method="POST">
-        <label>1. Dato curioso o inesperado sobre ti</label>
-        <input type="text" name="r3" required>
-      
-        <label>2. Tu película favorita</label>
-        <input type="text" name="r4" required>
-      
-        <label>3. Tu deporte favorito</label>
-        <input type="text" name="r6" required>
-      
-        <label>4. Prenda de ropa sin la que no podrías vivir</label>
-        <input type="text" name="r8" required>
-      
-        <label>5. El mejor concierto al que has ido</label>
-        <input type="text" name="r9" required>
-      
-        <label>6. Pasión fuera del trabajo</label>
-        <input type="text" name="r2" required>
+      <h1>📝 Cuéntanos sobre ti</h1>
 
-        <label>7. Objetivo profesional 2025</label>
-<input type="text" name="r11" required>
+<form method="post">
+  <!-- r2 – Pasión -->
+  <label for="r2">🎶 ¿Qué pasión te mueve fuera del trabajo?</label>
+  <input id="r2" name="r2" required>
 
-<label>8. Tu nivel de intro / extroversión (1 = muy introvertido · 5 = muy extrovertido)</label>
-<input type="number" name="r12" min="1" max="5" required>
-      
-        <button type="submit">Guardar Respuestas</button>
-      </form>      
+  <!-- r3 – Dato curioso -->
+  <label for="r3">🧠 Cuéntanos un dato curioso sobre ti</label>
+  <textarea id="r3" name="r3" rows="2" required></textarea>
+
+  <!-- r4 – Película favorita -->
+  <label for="r4">🎬 ¿Película favorita?</label>
+  <input id="r4" name="r4" required>
+
+  <!-- r6 – Deporte favorito -->
+  <label for="r6">🏀 ¿Deporte favorito?</label>
+  <input id="r6" name="r6" required>
+
+  <!-- r8 – Prenda imprescindible -->
+  <label for="r8">👕 Prenda de vestir sin la que no puedes vivir</label>
+  <input id="r8" name="r8" required>
+
+  <!-- r9 – Mejor concierto -->
+  <label for="r9">🎤 ¿Cuál ha sido el mejor concierto que has vivido?</label>
+  <input id="r9" name="r9" required>
+
+  <!-- r10 – Libro / arte favorito -->
+  <label for="r10">📖 Libro favorito <small>(o expresión artística favorita)</small></label>
+  <input id="r10" name="r10" required>
+
+  <!-- r12 – Mascota -->
+  <label for="r12">🐾 ¿Tienes mascota? Si la respuesta es sí, ¿cuál(es)?</label>
+  <input id="r12" name="r12">
+
+  <!-- r13 – Hijos -->
+  <label for="r13">👶 ¿Tienes hijos? Si la respuesta es sí, ¿cuántos / edades?</label>
+  <input id="r13" name="r13">
+
+  <button type="submit">Guardar</button>
+</form>
     {% endif %}
   </div>
 

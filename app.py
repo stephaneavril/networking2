@@ -28,37 +28,96 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
-# Autopatch de esquema (reto_equipo_foto)
 
+# 1️⃣ PRIMERA función: reto_equipo_foto (igual que antes)
 def ensure_schema():
     conn = sqlite3.connect("database.db")
-    cur = conn.cursor()
+    cur  = conn.cursor()
     cols = [c[1] for c in cur.execute("PRAGMA table_info(reto_equipo_foto)")]
     if "reto_no" not in cols:
         cur.execute("ALTER TABLE reto_equipo_foto ADD COLUMN reto_no INTEGER DEFAULT 1")
         print("✓ Columna reto_no añadida automáticamente")
-    cur.execute(
-        """
+    cur.execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS uniq_reto_equipo
         ON reto_equipo_foto(equipo, reto_no)
-        """
-    )
-    conn.commit()
-    conn.close()
+    """)
+    conn.commit(); conn.close()
 
+
+# 2️⃣ SEGUNDA función: nuevas preguntas (fuera de la anterior)
+def ensure_schema_conocete():
+    conn = sqlite3.connect("database.db")
+    cur  = conn.cursor()
+
+    cols = [c[1] for c in cur.execute(
+        "PRAGMA table_info(conexion_alfa_respuestas)"
+    )]
+
+    if "r12_mascota" not in cols:
+        cur.execute("ALTER TABLE conexion_alfa_respuestas "
+                    "ADD COLUMN r12_mascota TEXT")
+        print("✓ Columna r12_mascota creada")
+
+    if "r13_hijos" not in cols:
+        cur.execute("ALTER TABLE conexion_alfa_respuestas "
+                    "ADD COLUMN r13_hijos TEXT")
+        print("✓ Columna r13_hijos creada")
+
+    conn.commit(); conn.close()
+
+
+# Llamamos a ambas
 ensure_schema()
+ensure_schema_conocete()
 
 # ──────────────────────── UTILIDADES ──────────────────────
 
-def generar_perfil_ia(nombre, respuestas):
-    frases = [
-        f"🧠 {nombre} tiene un dato curioso: '{respuestas[0]}'.",
-        f"🎬 Su película favorita es '{respuestas[1]}'.",
-        f"🏀 Deporte favorito: '{respuestas[2]}'.",
-        f"👕 No podría vivir sin: '{respuestas[3]}'.",
-        f"🎤 El mejor concierto que ha vivido fue: '{respuestas[4]}'.",
-        f"🎶 Y fuera del trabajo le apasiona: '{respuestas[5]}'.",
-    ]
+d# ──────────────────────── UTILIDADES ──────────────────────
+def generar_perfil_ia(
+    nombre: str,
+    *,
+    dato_curioso: str = "",
+    pelicula: str = "",
+    deporte: str = "",
+    prenda: str = "",
+    concierto: str = "",
+    pasion: str = "",
+    libro: str = "",
+    mascota: str = "",
+    hijos: str = ""
+) -> str:
+    """Crea una mini-bio atractiva con todas las respuestas.
+
+    Agrega automáticamente solo los campos que vengan llenos.
+    Incluye un breve “por qué conocerle” al final.
+    """
+    frases = []
+    if dato_curioso:
+        frases.append(f"🧠 {nombre} tiene un dato curioso: «{dato_curioso}».")
+    if pelicula:
+        frases.append(f"🎬 Su película favorita es «{pelicula}».")
+    if deporte:
+        frases.append(f"🏀 Disfruta practicar o ver «{deporte}».")
+    if prenda:
+        frases.append(f"👕 No podría vivir sin «{prenda}».")
+    if concierto:
+        frases.append(f"🎤 El mejor concierto que ha vivido fue «{concierto}».")
+    if pasion:
+        frases.append(f"🎶 Fuera del trabajo le apasiona «{pasion}».")
+    if libro:
+        frases.append(f"📚 Su libro / arte favorito es «{libro}».")
+    if mascota:
+        frases.append(f"🐾 Tiene mascota(s): «{mascota}».")
+    if hijos:
+        frases.append(f"👨‍👩‍👧‍👦 Hijos: «{hijos}».")
+    
+    # “El porqué” – un remate breve
+    porque = (
+        "✨ ¿Por qué conocerle? "
+        f"Su combinación de {', '.join([pasion or 'pasiones', deporte or 'intereses', pelicula or 'gustos'])} "
+        "seguro generará conversaciones inolvidables."
+    )
+    frases.append(porque)
     return " ".join(frases)
 
 @app.before_request
@@ -168,28 +227,31 @@ def conocete_mejor():
             r8 = request.form.get("r8", "").strip()
             r9 = request.form.get("r9", "").strip()
             r10 = request.form.get("r10", "").strip() # Libro favorito
-            objetivo_2025 = request.form.get("r11", "").strip()
-
-            # --- Conversión segura del número (previene el error más común) ---
-            nivel_intro_str = request.form.get("r12", "0").strip()
-            nivel_intro = int(nivel_intro_str) if nivel_intro_str.isdigit() else 0
+            mascota = request.form.get("r12", "").strip()  # NUEVO
+            hijos   = request.form.get("r13", "").strip()  # NUEVO
 
             # Generamos el perfil con IA
-            perfil_ia = generar_perfil_ia(nombre, [r3, r4, r6, r8, r9, r2])
-
-            # Insertamos en la base de datos
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO conexion_alfa_respuestas
-                (correo, nombre, r2, r3, r4, r6, r8, r9, r10,
-                 objetivo_2025, nivel_introversion, perfil_ia)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-                """,
-                (
-                    correo, nombre, r2, r3, r4, r6, r8, r9, r10,
-                    objetivo_2025, nivel_intro, perfil_ia
-                ),
-            )
+            perfil_ia = generar_perfil_ia(
+            nombre,
+            dato_curioso=r3,
+            pelicula=r4,
+            deporte=r6,
+            prenda=r8,
+            concierto=r9,
+            pasion=r2,
+            libro=r10,
+            mascota=mascota,
+            hijos=hijos
+        )
+            conn.execute("""
+                INSERT OR REPLACE INTO conexion_alfa_respuestas (
+                correo, nombre, r2, r3, r4, r6, r8, r9, r10,
+                r12_mascota, r13_hijos, perfil_ia
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            correo, nombre, r2, r3, r4, r6, r8, r9, r10,
+            mascota, hijos, perfil_ia
+        ))
             conn.commit()
             flash("✅ ¡Respuestas guardadas con éxito!")
             
@@ -321,27 +383,46 @@ def foto_reto_equipo(reto_no):
                            mensaje=mensaje, equipo=equipo,
                            reto_no=reto_no, ya_existe=bool(ya_existe))
 
-@app.route('/ranking_adivina')
+# ------------------- RANKING ADIVINA --------------------
+@app.route("/ranking_adivina")
+@login_required
 def ranking_adivina():
-    if 'jugador' not in session:
-        return redirect('/')
-    conn = get_db_connection()
-    resultados = conn.execute("""
-        SELECT nombre_jugador,
-            aciertos,
-            puntos_extra,
-            (aciertos + puntos_extra) AS total,   -- ⬅️  nuevo campo
-            timestamp
-        FROM adivina_resultados
-        ORDER BY total DESC, timestamp ASC          -- ⬅️  orden por TOTAL
-    """).fetchall()
+    try:
+        conn = get_db_connection()
 
-    mi_resultado = conn.execute(
-        "SELECT *, (aciertos + puntos_extra) AS total "
-        "FROM adivina_resultados WHERE nombre_jugador = ?",
-        (session['jugador'],)
-    ).fetchone()
-    conn.close()
+        resultados = conn.execute("""
+            SELECT nombre_jugador,
+                   aciertos,
+                   puntos_extra,
+                   (aciertos + puntos_extra) AS total,
+                   timestamp
+            FROM adivina_resultados
+            ORDER BY total DESC, timestamp ASC
+        """).fetchall()
+
+        # Resultado propio (por si quieres sombrearlo en la tabla)
+        mi_resultado = conn.execute(
+            "SELECT * FROM adivina_resultados WHERE nombre_jugador = ?",
+            (session["jugador"],)
+        ).fetchone()
+
+        conn.close()
+
+        # Siempre devolvemos plantilla, incluso si la lista está vacía
+        return render_template(
+            "ranking_adivina.html",
+            resultados=resultados,
+            mi_resultado=mi_resultado
+        )
+
+    except Exception as e:
+        # Log para depuración en Render
+        print("❌ ERROR ranking_adivina:", e)
+        if "conn" in locals():
+            conn.close()
+        flash("❌ No se pudo mostrar el ranking. Revisa los logs.")
+        # Redirigimos a home para evitar error 500
+        return redirect(url_for("index"))
 
 @app.route('/reset_adivina_quien', methods=['POST'])
 def reset_adivina_quien():

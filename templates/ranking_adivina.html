@@ -2,36 +2,32 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <title>Ranking Adivina Quién</title>
+  <title>🏆 Ranking – Adivina Quién</title>
   <style>
-    body {
-      background-color: #0c0e2c;
-      font-family: 'Segoe UI', sans-serif;
-      color: white;
-      text-align: center;
-      padding: 30px;
+    body{
+      background:#0c0e2c;
+      font-family:'Segoe UI',sans-serif;
+      color:#fff;
+      text-align:center;
+      padding:30px;
     }
-    table {
-      margin: 0 auto;
-      border-collapse: collapse;
-      width: 90%;
+    table{
+      margin:0 auto;
+      width:90%;
+      border-collapse:collapse;
+      box-shadow:0 0 15px rgba(0,0,0,.4);
     }
-    th, td {
-      padding: 12px;
-      border-bottom: 1px solid #444;
+    th,td{padding:12px}
+    th{
+      background:#ec1c24;      /* pon aquí el púrpura AZ si lo prefieres */
+      color:#fff;
     }
-    th {
-      background-color: #ec1c24;   /* cámbialo luego a púrpura AZ */
-      color: white;
+    tr:nth-child(even){background:#14163a}
+    tr.highlight{
+      background:#1f2140;
+      font-weight:bold;
     }
-    tr.highlight {
-      background-color: #1f2140;
-      font-weight: bold;
-    }
-    a {
-      color: #ec1c24;
-      text-decoration: none;
-    }
+    a{color:#ec1c24;text-decoration:none}
   </style>
 </head>
 <body>
@@ -39,7 +35,6 @@
 
   <table>
     <thead>
-      <!-- ⬇️ NUEVO: añadimos columnas Aciertos y Bonus -->
       <tr>
         <th>Posición</th>
         <th>Nombre</th>
@@ -49,17 +44,20 @@
       </tr>
     </thead>
     <tbody>
-      {% for r in resultados %}
-      <tr {% if r['nombre_jugador'] == mi_resultado['nombre_jugador'] %}class="highlight"{% endif %}>
+    {% for r in resultados %}
+      <tr {% if mi_resultado and r['nombre_jugador']==mi_resultado['nombre_jugador'] %}class="highlight"{% endif %}>
         <td>{{ loop.index }}</td>
         <td>{{ r['nombre_jugador'] }}</td>
         <td>{{ r['aciertos'] }}</td>
         <td>{{ r['puntos_extra'] }}</td>
-        <!-- Total = aciertos + bonus -->
         <td>{{ r['total'] }}</td>
       </tr>
-      {% endfor %}
+    {% endfor %}
     </tbody>
   </table>
 
-  <p style="margin-to
+  <p style="margin-top:25px">
+    <a href="{{ url_for('index') }}">🏠 Volver al inicio</a>
+  </p>
+</body>
+</html>
