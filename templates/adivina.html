@@ -1,230 +1,149 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <title>🎬 Adivina Quién - El Casting</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="UTF-8" />
+  <title>🎬 Adivina Quién – El Casting</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
-    body {
-      font-family: 'Segoe UI', sans-serif;
-      background: radial-gradient(circle at top center, #1a1d3d, #0c0e2c);
-      color: white;
-      text-align: center;
-      padding: 20px;
+    body{
+      font-family:'Segoe UI',sans-serif;
+      background:radial-gradient(circle at top center,#1a1d3d,#0c0e2c);
+      color:#fff;text-align:center;padding:20px
     }
-
-    h1 {
-      font-size: 2.5em;
-      color: #ec1c24;
-      text-shadow: 2px 2px 5px black;
-      letter-spacing: 2px;
-      margin-bottom: 10px;
-    }
-
-    .tarjeta {
-      background-color: #1f2140;
-      padding: 30px;
-      margin: 30px auto;
-      border-radius: 15px;
-      max-width: 550px;
-      box-shadow: 0 0 20px rgba(236, 28, 36, 0.3);
-      border: 2px solid #ec1c24;
-      transition: transform 0.3s ease-in-out;
-    }
-
-    .tarjeta:hover {
-      transform: scale(1.02);
-    }
-
-    p {
-      font-size: 1.1em;
-      margin: 8px 0;
-    }
-
-    select {
-      padding: 10px;
-      font-size: 16px;
-      width: 85%;
-      margin-top: 15px;
-      border-radius: 6px;
-      border: none;
-    }
-
-    button {
-      padding: 12px 24px;
-      margin-top: 20px;
-      font-size: 16px;
-      border: none;
-      background-color: #ec1c24;
-      color: white;
-      border-radius: 8px;
-      cursor: pointer;
-      box-shadow: 0 0 10px rgba(236, 28, 36, 0.4);
-    }
-
-    #resultado {
-      margin-top: 20px;
-      font-weight: bold;
-      font-size: 1.2em;
-    }
-
-    #puntaje {
-      margin-top: 10px;
-      color: lightgreen;
-      font-weight: bold;
-    }
-
-    #timer {
-      font-size: 1.2em;
-      margin-top: 10px;
-      color: #ffca28;
-    }
-
-    #advertencia {
-      display: none;
-      font-weight: bold;
-      color: #ffeb3b;
-      margin-top: 10px;
-    }
+    h1{font-size:2.5em;color:#ec1c24;text-shadow:2px 2px 5px #000;letter-spacing:2px;margin-bottom:10px}
+    .tarjeta{background:#1f2140;padding:30px;margin:30px auto;border-radius:15px;max-width:550px;
+      box-shadow:0 0 20px rgba(236,28,36,.3);border:2px solid #ec1c24;transition:transform .3s}
+    .tarjeta:hover{transform:scale(1.02)}
+    p{font-size:1.1em;margin:8px 0}
+    select{padding:10px;font-size:16px;width:85%;margin-top:15px;border-radius:6px;border:none}
+    button{padding:12px 24px;margin-top:20px;font-size:16px;border:none;background:#ec1c24;color:#fff;
+      border-radius:8px;cursor:pointer;box-shadow:0 0 10px rgba(236,28,36,.4)}
+    #resultado{margin-top:20px;font-weight:bold;font-size:1.2em}
+    #puntaje{margin-top:10px;color:lightgreen;font-weight:bold}
+    #timer{font-size:1.2em;margin-top:10px;color:#ffca28}
+    #advertencia{display:none;font-weight:bold;color:#ffeb3b;margin-top:10px}
   </style>
 </head>
 <body>
-  <h1>🎬 Adivina Quién - El Casting</h1>
+  <h1>🎬 Adivina Quién – El Casting</h1>
 
   <div class="tarjeta">
     <div id="timer">⏳ Tiempo restante: 15:00</div>
-    <div id="advertencia">⚠️ ¡Quedan solo 2 minutos! Adivina rápido...</div>
+    <div id="advertencia">⚠️ ¡Quedan solo 2 minutos! Adivina rápido…</div>
+
     <div id="contenido"></div>
 
     <select id="respuesta">
       <option value="" disabled selected>🎭 ¿Quién crees que es?</option>
-      </select>
+    </select>
 
-    <br>
+    <br />
     <button onclick="verificar()">Responder</button>
+
     <div id="resultado"></div>
     <div id="puntaje">Puntaje: 0</div>
   </div>
 
   <script>
-    // --- NUEVA LÓGICA ---
-    
-    // 1. Guardamos a TODOS los participantes y luego elegimos 15 para jugar.
-    const todosLosParticipantes = {{ participantes|tojson }};
-    const participantesParaJugar = todosLosParticipantes.sort(() => 0.5 - Math.random()).slice(0, 15);
+    /* ---------- DATOS Y CONFIG ---------- */
+    const todosLosParticipantes = {{ participantes|tojson|safe }};
 
-    let indiceActual = 0; // Para saber qué tarjeta mostrar
-    let actual;
-    let aciertos = 0;
-    let puntaje = 0;
-    let tiempoRestante = 900; // 15 minutos
+    // 15 nombres para la sesión
+    const participantesParaJugar = todosLosParticipantes
+      .sort(() => 0.5 - Math.random())
+      .slice(0, 15);
+
+    let nombresRestantes = participantesParaJugar.map(p => p.nombre_completo);
+
+    let indiceActual   = 0;
+    let actual         = null;
+    let aciertos       = 0;
+    let puntaje        = 0;
+    let tiempoRestante = 900; // 15 min
     let temporizadorIntervalo;
 
-    // Claves para generar las pistas de forma aleatoria.
-    const frases_keys = [
-      ["dato_curioso", "🧠 Dato curioso"],
-      ["pelicula_favorita", "🎬 Película favorita"],
-      ["prenda_imprescindible", "👕 Prenda imprescindible"],
-      ["mejor_concierto", "🎤 Concierto"],
-      ["pasion", "🎶 Pasión"]
+    const pistas_keys = [
+      ["dato_curioso",         "🧠 Dato curioso"],
+      ["pelicula_favorita",    "🎬 Película favorita"],
+      ["deporte_favorito",  "🏀 Deporte favorito"],
+      ["mejor_concierto",      "🎤 Concierto"],
+      ["pasion",               "🎶 Pasión"]
     ];
 
-    function mostrarFrase() {
-      // Si ya se adivinaron los 15, termina el juego.
-      if (indiceActual >= participantesParaJugar.length) {
+    /* ---------- RENDER ---------- */
+    function mostrarFrase(){
+      if (indiceActual >= participantesParaJugar.length){
         finalizarJuego();
         return;
       }
 
       actual = participantesParaJugar[indiceActual];
-
-      // --- Generación dinámica del menú desplegable ---
       const nombreCorrecto = actual.nombre_completo;
-      
-      // Filtramos para obtener 14 nombres incorrectos al azar.
-      const opcionesIncorrectas = todosLosParticipantes
-        .filter(p => p.nombre_completo !== nombreCorrecto)
+
+      // 14 nombres erróneos
+      const opcionesIncorrectas = nombresRestantes
+        .filter(n => n !== nombreCorrecto)
         .sort(() => 0.5 - Math.random())
-        .slice(0, 14)
-        .map(p => p.nombre_completo);
+        .slice(0, 14);
 
-      // Creamos la lista final de 15, la barajamos y la mostramos.
-      let opcionesFinales = [...opcionesIncorrectas, nombreCorrecto];
-      opcionesFinales = opcionesFinales.sort(() => 0.5 - Math.random());
-      
-      const selectRespuesta = document.getElementById("respuesta");
-      selectRespuesta.innerHTML = '<option value="" disabled selected>🎭 ¿Quién crees que es?</option>'; // Limpiamos y ponemos la opción por defecto
-      opcionesFinales.forEach(nombre => {
-        const option = document.createElement("option");
-        option.value = nombre;
-        option.textContent = nombre;
-        selectRespuesta.appendChild(option);
+      const opcionesFinales = [...opcionesIncorrectas, nombreCorrecto]
+        .sort(() => 0.5 - Math.random());
+
+      const sel = document.getElementById("respuesta");
+      sel.innerHTML =
+        '<option value="" disabled selected>🎭 ¿Quién crees que es?</option>';
+      opcionesFinales.forEach(n => {
+        const opt = document.createElement("option");
+        opt.value = n;
+        opt.textContent = n;
+        sel.appendChild(opt);
       });
-      // --- Fin de la generación del menú ---
 
-
-      // Mostramos 3 pistas aleatorias para la persona actual.
-      const seleccionadas = frases_keys.sort(() => 0.5 - Math.random()).slice(0, 3);
-      let pistas = "";
-      for (const [clave, etiqueta] of seleccionadas) {
-        if(actual[clave]) {
-          pistas += `<p><strong>${etiqueta}:</strong> ${actual[clave]}</p>`;
-        }
-      }
-
+      const pistas = pistas_keys
+        .sort(() => 0.5 - Math.random())
+        .slice(0, 3)
+        .map(([k, label]) =>
+          actual[k] ? `<p><strong>${label}:</strong> ${actual[k]}</p>` : ""
+        )
+        .join("");
       document.getElementById("contenido").innerHTML = pistas;
-      document.getElementById("resultado").innerText = "";
+      document.getElementById("resultado").textContent = "";
     }
 
-    function verificar() {
-      const seleccion = document.getElementById("respuesta").value;
-      const correcto = actual.nombre_completo;
+    /* ---------- VERIFICACIÓN ---------- */
+    function verificar(){
+      const sel = document.getElementById("respuesta");
+      const seleccion = sel.value;
+      if(!seleccion) return;
 
-      if (seleccion === correcto) {
-        document.getElementById("resultado").innerText = "✅ ¡Correcto!";
-        aciertos++;
-        puntaje += 10;
-        document.getElementById("puntaje").innerText = `Puntaje: ${puntaje}`;
-        
-        // Pasamos a la siguiente persona
+      if(seleccion === actual.nombre_completo){
+        document.getElementById("resultado").textContent = "✅ ¡Correcto!";
+        aciertos++; puntaje += 10;
+        nombresRestantes = nombresRestantes.filter(n => n !== seleccion);
         indiceActual++;
-        setTimeout(mostrarFrase, 1000);
-      } else {
-        document.getElementById("resultado").innerText = "❌ Incorrecto, intenta con otro nombre.";
+        document.getElementById("puntaje").textContent = `Puntaje: ${puntaje}`;
+        setTimeout(mostrarFrase, 800);
+      }else{
+        document.getElementById("resultado").textContent =
+          "❌ Incorrecto, intenta de nuevo.";
         puntaje -= 10;
-        document.getElementById("puntaje").innerText = `Puntaje: ${puntaje}`;
+        document.getElementById("puntaje").textContent = `Puntaje: ${puntaje}`;
       }
     }
 
-    function finalizarJuego() {
-      clearInterval(temporizadorIntervalo);
-      fetch('/adivina_finalizado', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ aciertos, puntaje })
-      })
-      .then(res => res.json())
-      .then(data => {
-        alert(data.message || data.error);
-        window.location.href = "/ranking_adivina";
-      });
-    }
-
-    function iniciarTemporizador() {
+    /* ---------- TEMPORIZADOR ---------- */
+    function iniciarTemporizador(){
       const timer = document.getElementById("timer");
-      const advertencia = document.getElementById("advertencia");
+      const adv   = document.getElementById("advertencia");
 
       temporizadorIntervalo = setInterval(() => {
         tiempoRestante--;
-        const min = Math.floor(tiempoRestante / 60);
-        const seg = tiempoRestante % 60;
-        timer.innerText = `⏳ Tiempo restante: ${min.toString().padStart(2, '0')}:${seg.toString().padStart(2, '0')}`;
+        const m = String(Math.floor(tiempoRestante/60)).padStart(2,"0");
+        const s = String(tiempoRestante%60).padStart(2,"0");
+        timer.textContent = `⏳ Tiempo restante: ${m}:${s}`;
 
-        if (tiempoRestante === 120) {
-          advertencia.style.display = "block";
-        }
-
-        if (tiempoRestante <= 0) {
+        if (tiempoRestante === 120) adv.style.display = "block";
+        if (tiempoRestante <= 0){
           clearInterval(temporizadorIntervalo);
           alert("⏰ ¡Se acabó el tiempo!");
           finalizarJuego();
@@ -232,10 +151,24 @@
       }, 1000);
     }
 
-    // Iniciar todo
+    /* ---------- FIN DE JUEGO ---------- */
+    function finalizarJuego(){
+      clearInterval(temporizadorIntervalo);
+      fetch("/adivina_finalizado",{
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body:JSON.stringify({ aciertos, puntaje })
+      })
+      .then(r=>r.json())
+      .then(d=>{
+        alert(d.message || d.error);
+        window.location.href = "/ranking_adivina";
+      });
+    }
+
+    /* ---------- INICIO ---------- */
     mostrarFrase();
     iniciarTemporizador();
   </script>
-
 </body>
 </html>

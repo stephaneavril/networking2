@@ -1,12 +1,12 @@
-import random, os, sqlite3, pickle, json, numpy as np
+import os, random, sqlite3, pickle, json, numpy as np
 from datetime import datetime
 from functools import wraps
 from flask import (
     Flask, render_template, request, jsonify,
     session, redirect, flash, url_for
 )
-from sklearn.metrics.pairwise import cosine_similarity
 from werkzeug.utils import secure_filename
+from sklearn.metrics.pairwise import cosine_similarity
 
 # ───────────────────────── CONFIG ─────────────────────────
 with open("modelo_conexion_alfa.pkl", "rb") as f:
@@ -48,20 +48,9 @@ def ensure_schema():
 
 ensure_schema()
 
-def generar_perfil_ia(nombre, respuestas):
-    frases = [
-        f"🧠 {nombre} tiene un dato curioso: '{respuestas[0]}'.",
-        f"🎬 Su película favorita es '{respuestas[1]}'.",
-        f"🏀 Deporte favorito: '{respuestas[2]}'.",
-        f"👕 No podría vivir sin: '{respuestas[3]}'.",
-        f"🎤 El mejor concierto que ha vivido fue: '{respuestas[4]}'.",
-        f"🎶 Y fuera del trabajo le apasiona: '{respuestas[5]}'.",
-    ]
-    return " ".join(frases)
-
 # ──────────────────────── UTILIDADES ──────────────────────
 
-def generar_perfil_ia(nombre: str, respuestas: list[str]) -> str:
+def generar_perfil_ia(nombre, respuestas):
     frases = [
         f"🧠 {nombre} tiene un dato curioso: '{respuestas[0]}'.",
         f"🎬 Su película favorita es '{respuestas[1]}'.",
@@ -228,16 +217,26 @@ def reset_ranking_qr():
     return redirect('/admin_panel')
 
 # -------------------- RETO ADIVINA --------------------
-@app.route('/adivina')
+@app.route("/adivina")
+@login_required
 def adivina():
-    if 'jugador' not in session:
-        return redirect('/')
+    """Muestra 15 nombres aleatorios diferentes para CADA jugador.
+
+    ▸ La lista se genera por sesión; cada recarga cambia.
+    ▸ El front‑end (JS) debe ir quitando las opciones correctas conforme el
+      jugador atina; para eso basta con esconder la opción seleccionada o
+      volver a renderizar el <select> sin ese valor.
+    """
     conn = get_db_connection()
-    rows = conn.execute("SELECT * FROM adivina_participantes").fetchall()
+    filas = conn.execute("SELECT nombre_completo, id FROM adivina_participantes").fetchall()
     conn.close()
-    participantes = [dict(row) for row in rows]
-    random.shuffle(participantes)
-    return render_template('adivina.html', participantes=participantes)
+
+    # Construimos una lista de máximo 15 elementos aleatorios.
+    total = len(filas)
+    muestra = random.sample(filas, k=min(15, total)) if total > 0 else []
+
+    participantes = [dict(row) for row in muestra]
+    return render_template("adivina.html", participantes=participantes)
 
 @app.route('/adivina_finalizado', methods=['POST'])
 def adivina_finalizado():
