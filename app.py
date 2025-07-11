@@ -22,12 +22,28 @@ app.config.update({
 })
 
 # ─────────────────────── DB HELPERS ───────────────────────
-
 def get_db_connection():
     conn = sqlite3.connect("database.db")
     conn.row_factory = sqlite3.Row
     return conn
 
+# ----------------- ESQUEMA PARA NUEVAS PREGUNTAS -----------------
+def ensure_schema_conocete():
+    """Añade r12_mascota y r13_hijos si no existen."""
+    conn = sqlite3.connect("database.db")
+    cur  = conn.cursor()
+    cols = [c[1] for c in cur.execute("PRAGMA table_info(conexion_alfa_respuestas)")]
+
+    if "r12_mascota" not in cols:
+        cur.execute("ALTER TABLE conexion_alfa_respuestas ADD COLUMN r12_mascota TEXT")
+        print("✓ Columna r12_mascota creada")
+
+    if "r13_hijos" not in cols:
+        cur.execute("ALTER TABLE conexion_alfa_respuestas ADD COLUMN r13_hijos TEXT")
+        print("✓ Columna r13_hijos creada")
+
+    conn.commit()
+    conn.close()
 
 # 1️⃣ PRIMERA función: reto_equipo_foto (igual que antes)
 def ensure_schema():
@@ -70,54 +86,28 @@ def ensure_schema_conocete():
 ensure_schema()
 ensure_schema_conocete()
 
-# ──────────────────────── UTILIDADES ──────────────────────
 
-d# ──────────────────────── UTILIDADES ──────────────────────
+# ─────────────────────── UTILIDADES ──────────────────────
 def generar_perfil_ia(
     nombre: str,
     *,
-    dato_curioso: str = "",
-    pelicula: str = "",
-    deporte: str = "",
-    prenda: str = "",
-    concierto: str = "",
-    pasion: str = "",
-    libro: str = "",
-    mascota: str = "",
-    hijos: str = ""
+    dato_curioso="", pelicula="", deporte="", prenda="",
+    concierto="", pasion="", libro="", mascota="", hijos=""
 ) -> str:
-    """Crea una mini-bio atractiva con todas las respuestas.
-
-    Agrega automáticamente solo los campos que vengan llenos.
-    Incluye un breve “por qué conocerle” al final.
-    """
     frases = []
-    if dato_curioso:
-        frases.append(f"🧠 {nombre} tiene un dato curioso: «{dato_curioso}».")
-    if pelicula:
-        frases.append(f"🎬 Su película favorita es «{pelicula}».")
-    if deporte:
-        frases.append(f"🏀 Disfruta practicar o ver «{deporte}».")
-    if prenda:
-        frases.append(f"👕 No podría vivir sin «{prenda}».")
-    if concierto:
-        frases.append(f"🎤 El mejor concierto que ha vivido fue «{concierto}».")
-    if pasion:
-        frases.append(f"🎶 Fuera del trabajo le apasiona «{pasion}».")
-    if libro:
-        frases.append(f"📚 Su libro / arte favorito es «{libro}».")
-    if mascota:
-        frases.append(f"🐾 Tiene mascota(s): «{mascota}».")
-    if hijos:
-        frases.append(f"👨‍👩‍👧‍👦 Hijos: «{hijos}».")
-    
-    # “El porqué” – un remate breve
-    porque = (
+    if dato_curioso: frases.append(f"🧠 {nombre} tiene un dato curioso: «{dato_curioso}».")
+    if pelicula:     frases.append(f"🎬 Su película favorita es «{pelicula}».")
+    if deporte:      frases.append(f"🏀 Disfruta «{deporte}».")
+    if prenda:       frases.append(f"👕 No vive sin «{prenda}».")
+    if concierto:    frases.append(f"🎤 Mejor concierto: «{concierto}».")
+    if pasion:       frases.append(f"🎶 Le apasiona «{pasion}».")
+    if libro:        frases.append(f"📚 Su libro / arte favorito: «{libro}».")
+    if mascota:      frases.append(f"🐾 Mascota(s): «{mascota}».")
+    if hijos:        frases.append(f"👨‍👩‍👧‍👦 Hijos: «{hijos}».")
+    frases.append(
         "✨ ¿Por qué conocerle? "
-        f"Su combinación de {', '.join([pasion or 'pasiones', deporte or 'intereses', pelicula or 'gustos'])} "
-        "seguro generará conversaciones inolvidables."
+        "Su combinación de gustos y pasiones asegura charlas memorables."
     )
-    frases.append(porque)
     return " ".join(frases)
 
 @app.before_request
