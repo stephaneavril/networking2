@@ -47,6 +47,8 @@
 <script>
 /* ------------ CONFIG -------------- */
 const todosLosParticipantes = {{ participantes|tojson|safe }};
+console.log('👀 Primer participante:', todosLosParticipantes[0]);   // 👈 añade esto
+
 
 // 15 al azar para este jugador
 const participantesParaJugar = todosLosParticipantes
@@ -64,8 +66,8 @@ let temporizadorIntervalo;
 /* 👇 Ajusta SOLO aquí las pistas que quieras mostrar */
 const pistas_keys = [
   ["dato_curioso",      "🧠 Dato curioso"],
-  ["pelicula_favorita", "🎬 Película favorita"],
-  ["deporte_favorito",  "🏀 Deporte favorito"],   // <-- NUEVO
+  ["pelicula_Fav", "🎬 Película favorita"],
+  ["deporte",  "🏀 Deporte favorito"],   // <-- NUEVO
   ["mejor_concierto",   "🎤 Concierto"],
   ["pasion",            "🎶 Pasión"]
 ];

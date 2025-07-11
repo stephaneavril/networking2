@@ -220,20 +220,21 @@ def reset_ranking_qr():
 @app.route("/adivina")
 @login_required
 def adivina():
-    """Muestra 15 nombres aleatorios diferentes para CADA jugador.
-
-    ▸ La lista se genera por sesión; cada recarga cambia.
-    ▸ El front‑end (JS) debe ir quitando las opciones correctas conforme el
-      jugador atina; para eso basta con esconder la opción seleccionada o
-      volver a renderizar el <select> sin ese valor.
-    """
     conn = get_db_connection()
-    filas = conn.execute("SELECT nombre_completo, id FROM adivina_participantes").fetchall()
+    filas = conn.execute("""
+        SELECT nombre_completo,
+               dato_curioso,
+               pelicula_favorita,
+               deporte_favorito,
+               prenda_imprescindible,
+               mejor_concierto,
+               pasion
+        FROM adivina_participantes
+    """).fetchall()
     conn.close()
 
-    # Construimos una lista de máximo 15 elementos aleatorios.
     total = len(filas)
-    muestra = random.sample(filas, k=min(15, total)) if total > 0 else []
+    muestra = random.sample(filas, k=min(15, total)) if total else []
 
     participantes = [dict(row) for row in muestra]
     return render_template("adivina.html", participantes=participantes)
