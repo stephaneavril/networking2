@@ -44,131 +44,134 @@
     <div id="puntaje">Puntaje: 0</div>
   </div>
 
-  <script>
-    /* ---------- DATOS Y CONFIG ---------- */
-    const todosLosParticipantes = {{ participantes|tojson|safe }};
+<script>
+/* ------------ CONFIG -------------- */
+const todosLosParticipantes = {{ participantes|tojson|safe }};
 
-    // 15 nombres para la sesión
-    const participantesParaJugar = todosLosParticipantes
+// 15 al azar para este jugador
+const participantesParaJugar = todosLosParticipantes
       .sort(() => 0.5 - Math.random())
       .slice(0, 15);
 
-    let nombresRestantes = participantesParaJugar.map(p => p.nombre_completo);
+let nombresRestantes = participantesParaJugar.map(p => p.nombre_completo);
+let indiceActual   = 0;
+let actual         = null;
+let aciertos       = 0;
+let puntaje        = 0;
+let tiempoRestante = 900;   // 15 min
+let temporizadorIntervalo;
 
-    let indiceActual   = 0;
-    let actual         = null;
-    let aciertos       = 0;
-    let puntaje        = 0;
-    let tiempoRestante = 900; // 15 min
-    let temporizadorIntervalo;
+/* 👇 Ajusta SOLO aquí las pistas que quieras mostrar */
+const pistas_keys = [
+  ["dato_curioso",      "🧠 Dato curioso"],
+  ["pelicula_favorita", "🎬 Película favorita"],
+  ["deporte_favorito",  "🏀 Deporte favorito"],   // <-- NUEVO
+  ["mejor_concierto",   "🎤 Concierto"],
+  ["pasion",            "🎶 Pasión"]
+];
 
-    const pistas_keys = [
-      ["dato_curioso",         "🧠 Dato curioso"],
-      ["pelicula_favorita",    "🎬 Película favorita"],
-      ["deporte_favorito",  "🏀 Deporte favorito"],
-      ["mejor_concierto",      "🎤 Concierto"],
-      ["pasion",               "🎶 Pasión"]
-    ];
+/* ------------ FUNCIONES -------------- */
+function mostrarFrase(){
+  // ¿ya terminamos los 15?
+  if (indiceActual >= participantesParaJugar.length){
+    finalizarJuego(); return;
+  }
 
-    /* ---------- RENDER ---------- */
-    function mostrarFrase(){
-      if (indiceActual >= participantesParaJugar.length){
-        finalizarJuego();
-        return;
-      }
+  actual = participantesParaJugar[indiceActual];
+  const nombreCorrecto = actual.nombre_completo;
 
-      actual = participantesParaJugar[indiceActual];
-      const nombreCorrecto = actual.nombre_completo;
-
-      // 14 nombres erróneos
-      const opcionesIncorrectas = nombresRestantes
+  /* ----- SELECT con 15 nombres ----- */
+  const opcionesIncorrectas = nombresRestantes
         .filter(n => n !== nombreCorrecto)
         .sort(() => 0.5 - Math.random())
         .slice(0, 14);
 
-      const opcionesFinales = [...opcionesIncorrectas, nombreCorrecto]
+  const opcionesFinales = [...opcionesIncorrectas, nombreCorrecto]
         .sort(() => 0.5 - Math.random());
 
-      const sel = document.getElementById("respuesta");
-      sel.innerHTML =
-        '<option value="" disabled selected>🎭 ¿Quién crees que es?</option>';
-      opcionesFinales.forEach(n => {
-        const opt = document.createElement("option");
-        opt.value = n;
-        opt.textContent = n;
-        sel.appendChild(opt);
-      });
+  const sel = document.getElementById("respuesta");
+  sel.innerHTML = '<option value="" disabled selected>🎭 ¿Quién crees que es?</option>';
+  opcionesFinales.forEach(n =>
+      sel.insertAdjacentHTML("beforeend", `<option value="${n}">${n}</option>`));
 
-      const pistas = pistas_keys
-        .sort(() => 0.5 - Math.random())
-        .slice(0, 3)
-        .map(([k, label]) =>
-          actual[k] ? `<p><strong>${label}:</strong> ${actual[k]}</p>` : ""
-        )
-        .join("");
-      document.getElementById("contenido").innerHTML = pistas;
-      document.getElementById("resultado").textContent = "";
-    }
+  /* ----- PISTAS ----- */
+  const disponibles = pistas_keys.filter(([k]) => actual[k] && actual[k].trim());
+  let htmlPistas = "";
 
-    /* ---------- VERIFICACIÓN ---------- */
-    function verificar(){
-      const sel = document.getElementById("respuesta");
-      const seleccion = sel.value;
-      if(!seleccion) return;
+  if (disponibles.length){
+    const mostrar = disponibles.length > 3
+        ? disponibles.sort(() => 0.5 - Math.random()).slice(0,3)
+        : disponibles;
+    htmlPistas = mostrar.map(
+        ([k,label])=>`<p><strong>${label}:</strong> ${actual[k]}</p>`).join("");
+  }else{
+    // Sin pistas: mensaje y saltar a la siguiente persona
+    htmlPistas = "<p>🤷‍♂️ Sin pistas disponibles para esta persona.</p>";
+    // Avanza inmediatamente tras mostrar el mensaje 1 s
+    setTimeout(() => { indiceActual++; mostrarFrase(); }, 1000);
+  }
 
-      if(seleccion === actual.nombre_completo){
-        document.getElementById("resultado").textContent = "✅ ¡Correcto!";
-        aciertos++; puntaje += 10;
-        nombresRestantes = nombresRestantes.filter(n => n !== seleccion);
-        indiceActual++;
-        document.getElementById("puntaje").textContent = `Puntaje: ${puntaje}`;
-        setTimeout(mostrarFrase, 800);
-      }else{
-        document.getElementById("resultado").textContent =
-          "❌ Incorrecto, intenta de nuevo.";
-        puntaje -= 10;
-        document.getElementById("puntaje").textContent = `Puntaje: ${puntaje}`;
-      }
-    }
+  document.getElementById("contenido").innerHTML = htmlPistas;
+  document.getElementById("resultado").textContent = "";
+}
 
-    /* ---------- TEMPORIZADOR ---------- */
-    function iniciarTemporizador(){
-      const timer = document.getElementById("timer");
-      const adv   = document.getElementById("advertencia");
+function verificar(){
+  const seleccion = document.getElementById("respuesta").value;
+  if(!seleccion) return;
 
-      temporizadorIntervalo = setInterval(() => {
-        tiempoRestante--;
-        const m = String(Math.floor(tiempoRestante/60)).padStart(2,"0");
-        const s = String(tiempoRestante%60).padStart(2,"0");
-        timer.textContent = `⏳ Tiempo restante: ${m}:${s}`;
+  const correcto = actual.nombre_completo;
+  if(seleccion === correcto){
+    document.getElementById("resultado").textContent = "✅ ¡Correcto!";
+    aciertos++; puntaje += 10;
+    nombresRestantes = nombresRestantes.filter(n => n !== correcto);
+    indiceActual++;
+    document.getElementById("puntaje").textContent = `Puntaje: ${puntaje}`;
+    setTimeout(mostrarFrase, 800);
+  }else{
+    document.getElementById("resultado").textContent =
+        "❌ Incorrecto, intenta de nuevo.";
+    puntaje -= 10;
+    document.getElementById("puntaje").textContent = `Puntaje: ${puntaje}`;
+  }
+}
 
-        if (tiempoRestante === 120) adv.style.display = "block";
-        if (tiempoRestante <= 0){
-          clearInterval(temporizadorIntervalo);
-          alert("⏰ ¡Se acabó el tiempo!");
-          finalizarJuego();
-        }
-      }, 1000);
-    }
+function iniciarTemporizador(){
+  const timer = document.getElementById("timer");
+  const advertencia = document.getElementById("advertencia");
 
-    /* ---------- FIN DE JUEGO ---------- */
-    function finalizarJuego(){
+  temporizadorIntervalo = setInterval(()=>{
+    tiempoRestante--;
+    const min = Math.floor(tiempoRestante/60).toString().padStart(2,"0");
+    const seg = (tiempoRestante%60).toString().padStart(2,"0");
+    timer.textContent = `⏳ Tiempo restante: ${min}:${seg}`;
+
+    if(tiempoRestante === 120) advertencia.style.display="block";
+    if(tiempoRestante <= 0){
       clearInterval(temporizadorIntervalo);
-      fetch("/adivina_finalizado",{
-        method:"POST",
-        headers:{ "Content-Type":"application/json" },
-        body:JSON.stringify({ aciertos, puntaje })
-      })
-      .then(r=>r.json())
-      .then(d=>{
-        alert(d.message || d.error);
-        window.location.href = "/ranking_adivina";
-      });
+      alert("⏰ ¡Se acabó el tiempo!");
+      finalizarJuego();
     }
+  },1000);
+}
 
-    /* ---------- INICIO ---------- */
-    mostrarFrase();
-    iniciarTemporizador();
-  </script>
+function finalizarJuego(){
+  clearInterval(temporizadorIntervalo);
+  fetch("/adivina_finalizado",{
+    method:"POST",
+    headers:{ "Content-Type":"application/json" },
+    body:JSON.stringify({ aciertos, puntaje })
+  })
+  .then(r=>r.json())
+  .then(d=>{
+    alert(d.message || d.error);
+    window.location.href="/ranking_adivina";
+  });
+}
+
+/* ------------ INICIO -------------- */
+mostrarFrase();
+iniciarTemporizador();
+</script>
+
 </body>
 </html>
