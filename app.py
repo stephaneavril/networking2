@@ -327,13 +327,21 @@ def ranking_adivina():
         return redirect('/')
     conn = get_db_connection()
     resultados = conn.execute("""
-        SELECT nombre_jugador, aciertos, puntos_extra, timestamp
+        SELECT nombre_jugador,
+            aciertos,
+            puntos_extra,
+            (aciertos + puntos_extra) AS total,   -- ⬅️  nuevo campo
+            timestamp
         FROM adivina_resultados
-        ORDER BY aciertos DESC, puntos_extra DESC, timestamp ASC
+        ORDER BY total DESC, timestamp ASC          -- ⬅️  orden por TOTAL
     """).fetchall()
-    mi_resultado = conn.execute("SELECT * FROM adivina_resultados WHERE nombre_jugador = ?", (session['jugador'],)).fetchone()
+
+    mi_resultado = conn.execute(
+        "SELECT *, (aciertos + puntos_extra) AS total "
+        "FROM adivina_resultados WHERE nombre_jugador = ?",
+        (session['jugador'],)
+    ).fetchone()
     conn.close()
-    return render_template('ranking_adivina.html', resultados=resultados, mi_resultado=mi_resultado)
 
 @app.route('/reset_adivina_quien', methods=['POST'])
 def reset_adivina_quien():
