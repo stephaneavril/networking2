@@ -1,18 +1,14 @@
-# ───── Básicos de la app ─────────────────────────
+# --- dependencias ligeras ---
 Flask==3.1.1
-flask-cors==4.0.0          # CORS simple
-gunicorn==23.0.0           # servidor WSGI para producción
-python-dotenv==1.0.1       # variables de entorno
-
-# ───── Machine Learning / IA ligero ──────────────
-sentence-transformers==2.7.0
+gunicorn==23.0.0
+numpy==2.2.6
 scikit-learn==1.7.0
-numpy==2.2.6               # compatible con SciPy 1.13
-scipy==1.13.0
-
-# ───── OpenAI SDK ────────────────────────────────
-openai==1.30.5
-
-# ───── Utilidades varias ─────────────────────────
+sentence-transformers==2.7.0        # si sigues usando el modelo IA local
+flask-cors==4.0.0
 requests==2.32.4
-qrcode[pil]==8.2           # generate/decod QR con Pillow
+qrcode[pil]
+python-dotenv==1.0.1
+
+# 💡 clave del problema
+httpx==0.27.*               # <- fija versión
+openai==1.30.5              # o la más nueva que prefieras
