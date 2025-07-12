@@ -5,3 +5,5 @@ numpy
 scikit-learn
 requests
 qrcode[pil]
+sentence-transformers==2.7
+scipy==1.13
