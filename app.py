@@ -333,23 +333,26 @@ def reset_ranking_qr():
 @login_required
 def adivina():
     conn = get_db_connection()
+
     filas = conn.execute("""
-        SELECT nombre_completo,
-               dato_curioso,
-               pelicula_favorita,
-               deporte_favorito,
-               prenda_imprescindible,
-               mejor_concierto,
-               pasion
-        FROM adivina_participantes
+        SELECT nombre_completo, dato_curioso, pelicula_favorita,
+               deporte_favorito, prenda_imprescindible,
+               mejor_concierto, pasion
+        FROM   adivina_participantes
     """).fetchall()
+
+    muestra = random.sample(filas, k=min(15, len(filas)))   # ← 15 exactos
+    participantes = [dict(r) for r in muestra]
+
+    # obtenemos de una vez el nombre del match (si existe)
+    match_name = obtener_match_para(session["correo"], conn)
     conn.close()
 
-    total = len(filas)
-    muestra = random.sample(filas, k=min(15, total)) if total else []
-
-    participantes = [dict(row) for row in muestra]
-    return render_template("adivina.html", participantes=participantes)
+    return render_template(
+        "adivina.html",
+        participantes=participantes,
+        match_name=match_name       # ← se lo mandamos al front
+    )
 
 @app.route('/adivina_finalizado', methods=['POST'])
 def adivina_finalizado():
@@ -380,6 +383,8 @@ def adivina_finalizado():
     """, (jugador, aciertos, puntaje))
     conn.commit()
     conn.close()
+
+    match_name = obtener_match_para(session["correo"], conn)
 
     return jsonify({
         "message": f"🎉 ¡Reto completado! {jugador} acertó {aciertos} nombre(s) y obtuvo {puntaje} pts.",
@@ -556,6 +561,25 @@ def respuestas_curiosas():
         })
 
     return render_template("respuestas_curiosas.html", destacados=destacados)
+
+# ── NUEVO helper (lo pones cerca de otras utilidades) ────────────
+def obtener_match_para(correo_jugador, conn):
+    """
+    Devuelve el nombre de la persona con la que mejor matchea el jugador,
+    usando la tabla conexion_alfa_matches.  Si aún no tiene, regresa None.
+    """
+    row = conn.execute("""
+        SELECT CASE 
+                 WHEN correo_1 = ?
+                 THEN nombre_2
+                 ELSE nombre_1
+               END AS match_name
+        FROM   conexion_alfa_matches
+        WHERE  correo_1 = ? OR correo_2 = ?
+        ORDER  BY id ASC            -- el primero que encuentre
+        LIMIT 1
+    """, (correo_jugador, correo_jugador, correo_jugador)).fetchone()
+    return row["match_name"] if row else None
 
 # -------------------- SUBIR EVIDENCIA INDIVIDUAL --------------------
 @app.route('/subir_evidencia', methods=['POST'])

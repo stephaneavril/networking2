@@ -5,19 +5,13 @@
   <title>🎬 Adivina Quién – El Casting</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
-    body{
-      font-family:'Segoe UI',sans-serif;
-      background:radial-gradient(circle at top center,#1a1d3d,#0c0e2c);
-      color:#fff;text-align:center;padding:20px
-    }
+    body{font-family:'Segoe UI',sans-serif;background:radial-gradient(circle at top center,#1a1d3d,#0c0e2c);color:#fff;text-align:center;padding:20px}
     h1{font-size:2.5em;color:#ec1c24;text-shadow:2px 2px 5px #000;letter-spacing:2px;margin-bottom:10px}
-    .tarjeta{background:#1f2140;padding:30px;margin:30px auto;border-radius:15px;max-width:550px;
-      box-shadow:0 0 20px rgba(236,28,36,.3);border:2px solid #ec1c24;transition:transform .3s}
+    .tarjeta{background:#1f2140;padding:30px;margin:30px auto;border-radius:15px;max-width:550px;box-shadow:0 0 20px rgba(236,28,36,.3);border:2px solid #ec1c24;transition:transform .3s}
     .tarjeta:hover{transform:scale(1.02)}
     p{font-size:1.1em;margin:8px 0}
     select{padding:10px;font-size:16px;width:85%;margin-top:15px;border-radius:6px;border:none}
-    button{padding:12px 24px;margin-top:20px;font-size:16px;border:none;background:#ec1c24;color:#fff;
-      border-radius:8px;cursor:pointer;box-shadow:0 0 10px rgba(236,28,36,.4)}
+    button{padding:12px 24px;margin-top:20px;font-size:16px;border:none;background:#ec1c24;color:#fff;border-radius:8px;cursor:pointer;box-shadow:0 0 10px rgba(236,28,36,.4)}
     #resultado{margin-top:20px;font-weight:bold;font-size:1.2em}
     #puntaje{margin-top:10px;color:lightgreen;font-weight:bold}
     #timer{font-size:1.2em;margin-top:10px;color:#ffca28}
@@ -25,155 +19,116 @@
   </style>
 </head>
 <body>
-  <h1>🎬 Adivina Quién – El Casting</h1>
+<h1>🎬 Adivina Quién – El Casting</h1>
 
-  <div class="tarjeta">
-    <div id="timer">⏳ Tiempo restante: 15:00</div>
-    <div id="advertencia">⚠️ ¡Quedan solo 2 minutos! Adivina rápido…</div>
+<div class="tarjeta">
+  <div id="timer">⏳ Tiempo restante: 15:00</div>
+  <div id="advertencia">⚠️ ¡Quedan solo 2 minutos! Adivina rápido…</div>
 
-    <div id="contenido"></div>
+  <div id="contenido"></div>
 
-    <select id="respuesta">
-      <option value="" disabled selected>🎭 ¿Quién crees que es?</option>
-    </select>
+  <select id="respuesta">
+    <option value="" disabled selected>🎭 ¿Quién crees que es?</option>
+  </select>
 
-    <br />
-    <button onclick="verificar()">Responder</button>
+  <br/>
+  <button onclick="verificar()">Responder</button>
 
-    <div id="resultado"></div>
-    <div id="puntaje">Puntaje: 0</div>
-  </div>
+  <div id="resultado"></div>
+  <div id="puntaje">Puntaje: 0</div>
+</div>
 
 <script>
-/* ------------ CONFIG -------------- */
-const todosLosParticipantes = {{ participantes|tojson|safe }};
-console.log('👀 Primer participante:', todosLosParticipantes[0]);   // 👈 añade esto
+/* —— datos que inyecta Flask —— */
+const PARTICIPANTES = {{ participantes|tojson|safe }};
+const MATCH_NAME    = {{ match_name|tojson|safe }};   // puede ser null
 
+/* —— elegimos 15 —— */
+const participantesParaJugar = PARTICIPANTES.sort(()=>0.5-Math.random()).slice(0,15);
+let nombresRestantes = participantesParaJugar.map(p=>p.nombre_completo);
 
-// 15 al azar para este jugador
-const participantesParaJugar = todosLosParticipantes
-      .sort(() => 0.5 - Math.random())
-      .slice(0, 15);
+let indiceActual=0, actual=null, aciertos=0, puntaje=0, tiempoRestante=900, temporizador;
 
-let nombresRestantes = participantesParaJugar.map(p => p.nombre_completo);
-let indiceActual   = 0;
-let actual         = null;
-let aciertos       = 0;
-let puntaje        = 0;
-let tiempoRestante = 900;   // 15 min
-let temporizadorIntervalo;
-
-/* 👇 Ajusta SOLO aquí las pistas que quieras mostrar */
+/* campos que existen en tu tabla */
 const pistas_keys = [
   ["dato_curioso",      "🧠 Dato curioso"],
-  ["pelicula_Fav", "🎬 Película favorita"],
-  ["deporte",  "🏀 Deporte favorito"],   // <-- NUEVO
+  ["pelicula_favorita", "🎬 Película favorita"],
+  ["deporte_favorito",  "🏀 Deporte favorito"],
   ["mejor_concierto",   "🎤 Concierto"],
   ["pasion",            "🎶 Pasión"]
 ];
 
-/* ------------ FUNCIONES -------------- */
 function mostrarFrase(){
-  // ¿ya terminamos los 15?
-  if (indiceActual >= participantesParaJugar.length){
-    finalizarJuego(); return;
-  }
+  if(indiceActual>=participantesParaJugar.length){finalizarJuego();return;}
 
   actual = participantesParaJugar[indiceActual];
-  const nombreCorrecto = actual.nombre_completo;
+  const correcto = actual.nombre_completo;
 
-  /* ----- SELECT con 15 nombres ----- */
-  const opcionesIncorrectas = nombresRestantes
-        .filter(n => n !== nombreCorrecto)
-        .sort(() => 0.5 - Math.random())
-        .slice(0, 14);
+  /* —— select —— */
+  const opcionesIncorrectas = nombresRestantes.filter(n=>n!==correcto)
+        .sort(()=>0.5-Math.random()).slice(0,14);
+  const opciones = [...opcionesIncorrectas,correcto].sort(()=>0.5-Math.random());
 
-  const opcionesFinales = [...opcionesIncorrectas, nombreCorrecto]
-        .sort(() => 0.5 - Math.random());
+  const sel=document.getElementById("respuesta");
+  sel.innerHTML='<option value="" disabled selected>🎭 ¿Quién crees que es?</option>';
+  opciones.forEach(n=>sel.insertAdjacentHTML("beforeend",`<option>${n}</option>`));
 
-  const sel = document.getElementById("respuesta");
-  sel.innerHTML = '<option value="" disabled selected>🎭 ¿Quién crees que es?</option>';
-  opcionesFinales.forEach(n =>
-      sel.insertAdjacentHTML("beforeend", `<option value="${n}">${n}</option>`));
-
-  /* ----- PISTAS ----- */
-  const disponibles = pistas_keys.filter(([k]) => actual[k] && actual[k].trim());
-  let htmlPistas = "";
-
-  if (disponibles.length){
-    const mostrar = disponibles.length > 3
-        ? disponibles.sort(() => 0.5 - Math.random()).slice(0,3)
-        : disponibles;
-    htmlPistas = mostrar.map(
-        ([k,label])=>`<p><strong>${label}:</strong> ${actual[k]}</p>`).join("");
-  }else{
-    // Sin pistas: mensaje y saltar a la siguiente persona
-    htmlPistas = "<p>🤷‍♂️ Sin pistas disponibles para esta persona.</p>";
-    // Avanza inmediatamente tras mostrar el mensaje 1 s
-    setTimeout(() => { indiceActual++; mostrarFrase(); }, 1000);
-  }
-
-  document.getElementById("contenido").innerHTML = htmlPistas;
-  document.getElementById("resultado").textContent = "";
+  /* —— pistas —— */
+  const disponibles = pistas_keys.filter(([k])=>actual[k]);
+  const elegidas = (disponibles.length>3?disponibles.sort(()=>0.5-Math.random()).slice(0,3):disponibles)
+      .map(([k,lab])=>`<p><strong>${lab}:</strong> ${actual[k]}</p>`).join("");
+  document.getElementById("contenido").innerHTML = elegidas || "<p>🤷‍♂️ Sin pistas.</p>";
+  document.getElementById("resultado").textContent="";
 }
 
 function verificar(){
-  const seleccion = document.getElementById("respuesta").value;
-  if(!seleccion) return;
-
-  const correcto = actual.nombre_completo;
-  if(seleccion === correcto){
-    document.getElementById("resultado").textContent = "✅ ¡Correcto!";
-    aciertos++; puntaje += 10;
-    nombresRestantes = nombresRestantes.filter(n => n !== correcto);
+  const sel=document.getElementById("respuesta"), val=sel.value;
+  if(!val) return;
+  if(val===actual.nombre_completo){
+    document.getElementById("resultado").textContent="✅ ¡Correcto!";
+    aciertos++; puntaje+=10;
+    nombresRestantes=nombresRestantes.filter(n=>n!==val);
     indiceActual++;
-    document.getElementById("puntaje").textContent = `Puntaje: ${puntaje}`;
-    setTimeout(mostrarFrase, 800);
+    document.getElementById("puntaje").textContent=`Puntaje: ${puntaje}`;
+    setTimeout(mostrarFrase,800);
   }else{
-    document.getElementById("resultado").textContent =
-        "❌ Incorrecto, intenta de nuevo.";
-    puntaje -= 10;
-    document.getElementById("puntaje").textContent = `Puntaje: ${puntaje}`;
+    document.getElementById("resultado").textContent="❌ Incorrecto, intenta de nuevo.";
+    puntaje-=10;
+    document.getElementById("puntaje").textContent=`Puntaje: ${puntaje}`;
   }
 }
 
 function iniciarTemporizador(){
-  const timer = document.getElementById("timer");
-  const advertencia = document.getElementById("advertencia");
-
-  temporizadorIntervalo = setInterval(()=>{
+  const t=document.getElementById("timer"), adv=document.getElementById("advertencia");
+  temporizador=setInterval(()=>{
     tiempoRestante--;
-    const min = Math.floor(tiempoRestante/60).toString().padStart(2,"0");
-    const seg = (tiempoRestante%60).toString().padStart(2,"0");
-    timer.textContent = `⏳ Tiempo restante: ${min}:${seg}`;
-
-    if(tiempoRestante === 120) advertencia.style.display="block";
-    if(tiempoRestante <= 0){
-      clearInterval(temporizadorIntervalo);
-      alert("⏰ ¡Se acabó el tiempo!");
-      finalizarJuego();
-    }
+    const m=String(Math.floor(tiempoRestante/60)).padStart(2,"0");
+    const s=String(tiempoRestante%60).padStart(2,"0");
+    t.textContent=`⏳ Tiempo restante: ${m}:${s}`;
+    if(tiempoRestante===120) adv.style.display="block";
+    if(tiempoRestante<=0){clearInterval(temporizador);alert("⏰ ¡Se acabó el tiempo!");finalizarJuego();}
   },1000);
 }
 
 function finalizarJuego(){
-  clearInterval(temporizadorIntervalo);
+  clearInterval(temporizador);
   fetch("/adivina_finalizado",{
     method:"POST",
-    headers:{ "Content-Type":"application/json" },
-    body:JSON.stringify({ aciertos, puntaje })
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({aciertos,puntaje})
   })
   .then(r=>r.json())
   .then(d=>{
-    alert(d.message || d.error);
+    alert(d.message||d.error);
+    const nm=d.match||MATCH_NAME;
+    if(nm) alert(`🤝 ¡La IA cree que tu mejor match para platicar es ${nm}!`);
     window.location.href="/ranking_adivina";
   });
 }
 
-/* ------------ INICIO -------------- */
+/* —— arranque —— */
 mostrarFrase();
 iniciarTemporizador();
 </script>
-
 </body>
 </html>
