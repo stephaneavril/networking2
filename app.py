@@ -1264,43 +1264,6 @@ def reset_conexion_alfa():
     flash("✅ Conexión Alfa reiniciado correctamente.")
     return redirect('/admin_panel')
 
-# ------- Generar Matches (admin) -------------------------------------------
-@app.route("/generar_matches_conexion_alfa", methods=["POST"])
-def generar_matches_conexion_alfa():
-    if "jugador" not in session:
-        return redirect("/")
-
-    conn = get_db_connection()
-    datos = conn.execute("SELECT * FROM conexion_alfa_respuestas").fetchall()
-    if len(datos) < 2:
-        flash("❌ Mínimo 2 participantes para generar matches.")
-        conn.close(); return redirect("/admin_panel")
-
-    pares = hacer_matches(datos)
-
-    # Guardar evitando duplicados
-    ya = set(tuple(sorted(p[:2])) for p in conn.execute(
-        "SELECT correo_1, correo_2 FROM conexion_alfa_matches").fetchall())
-
-    nuevos = 0
-    for p in pares:
-        key = tuple(sorted((p["correo_1"], p["correo_2"])))
-        if key in ya: continue
-        conn.execute("""
-            INSERT INTO conexion_alfa_matches (
-              correo_1, correo_2, nombre_1, nombre_2, perfil_1, perfil_2, razon_match)
-            VALUES (?,?,?,?,?,?,?)
-        """, (
-            p["correo_1"], p["correo_2"], p["nombre_1"], p["nombre_2"],
-            p["perfil_1"], p["perfil_2"],
-            f"🤖 Match IA · similitud {p['score']*100:.0f}%"
-        ))
-        nuevos += 1
-    conn.commit(); conn.close()
-
-    flash(f"✅ {nuevos} matches generados con éxito (modelo OpenAI).")
-    return redirect("/admin_panel")
-
 @app.route('/forzar_matches_conexion_alfa', methods=['POST'])
 def forzar_matches_conexion_alfa():
     import subprocess
