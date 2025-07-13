@@ -1,15 +1,26 @@
-import os, random, sqlite3, json, time
+import os
+import random
+import sqlite3
+import time
 from datetime import datetime
 from functools import wraps
 from typing import List, Dict
 
 from flask import (
-    Flask, render_template, request, jsonify,
-    session, redirect, flash, url_for
+    Flask,
+    render_template,
+    request,
+    jsonify,
+    session,
+    redirect,
+    flash,
+    url_for,
 )
+from openai import OpenAI, OpenAIError
 from werkzeug.utils import secure_filename
-from openai import OpenAI
 from dotenv import load_dotenv
+from sklearn.metrics.pairwise import cosine_similarity
+import joblib
 
 # ───────────────────────── CONFIG ─────────────────────────
 load_dotenv()
@@ -27,21 +38,19 @@ app.config.update({
     "EMBED_MODEL": "text-embedding-3-small"
 })
 
-# ───────── Admin quick-access ─────────
+# ───────── Admin quick‑access ─────────
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "SupermanNoEsGay")
 
+
 def admin_ok(req):
-    """
-    Devuelve True si:
-      • ya hay sesión de admin                            ó
-      • viene ?token=… correcto en la URL                ó
-      • encabezado X-Admin-Token correcto
-    """
+    """True si hay sesión de admin o token válido en query/header."""
+
     if session.get("is_admin"):
         return True
+
     token = req.args.get("token") or req.headers.get("X-Admin-Token")
     if token and token == ADMIN_TOKEN:
-        session["is_admin"] = True     # guardamos para el resto de la sesión
+        session["is_admin"] = True  # persistir para resto de la sesión
         return True
     return False
 # ─────────────────────── DB HELPERS ───────────────────────
@@ -76,6 +85,10 @@ def ensure_schema():
     conn.commit(); conn.close()
 
 ensure_schema()
+
+# ─────────────────────── MODELO IA ───────────────────────
+vectorizer_ia = joblib.load("vectorizer_ia.pkl")
+
 
 # ─────────────────────── UTILIDADES ──────────────────────
 
@@ -112,51 +125,74 @@ def embed_text(text: str) -> List[float]:
 # ---------- Emparejamiento Greedy ------------------------------------------
 
 def build_similarity(vecs: List[List[float]]) -> List[List[float]]:
-    """Cosine Sim (rápida) entre todos los embeddings."""
+    """Matriz coseno entre todos los vectores."""
+
     import numpy as np
+
     M = np.array(vecs)
     M = M / (np.linalg.norm(M, axis=1, keepdims=True) + 1e-9)
     return (M @ M.T).tolist()
 
 
 def hacer_matches(datos: List[sqlite3.Row]) -> List[Dict]:
-    # 1. preparar textos
-    texts = [
-        " ".join([
-            d["r3"], d["r4"], d["r6"], d["r8"], d["r9"], d["r2"],
-            d["r10"], d["r12_mascota"], d["r13_hijos"]
-        ]).lower() for d in datos
+    # 1. Armar textos a embeddear
+    textos = [
+        " ".join(
+            [
+                d.get("r3", ""),
+                d.get("r4", ""),
+                d.get("r6", ""),
+                d.get("r8", ""),
+                d.get("r9", ""),
+                d.get("r2", ""),
+                d.get("r10", ""),
+                d.get("r12_mascota", ""),
+                d.get("r13_hijos", ""),
+            ]
+        ).lower()
+        for d in datos
     ]
-    embeddings = [embed_text(t) for t in texts]
-    S = build_similarity(embeddings)
 
-    n = len(datos)
-    usados = set(); pares = []
-    for i in range(n):
-        if i in usados: continue
-        # elegir j ≠ i con mayor similitud no usado
+    embeddings = [embed_text(t) for t in textos]
+    sim = build_similarity(embeddings)
+
+    usados, pares = set(), []
+    for i in range(len(datos)):
+        if i in usados:
+            continue
+
         mejor_j, mejor_sim = None, -1
-        for j in range(n):
-            if j == i or j in usados: continue
-            if S[i][j] > mejor_sim:
-                mejor_j, mejor_sim = j, S[i][j]
-        if mejor_j is not None:
-            usados |= {i, mejor_j}
-            pares.append({
+        for j in range(len(datos)):
+            if j == i or j in usados:
+                continue
+            if sim[i][j] > mejor_sim:
+                mejor_j, mejor_sim = j, sim[i][j]
+
+        if mejor_j is None:
+            continue
+
+        usados.update({i, mejor_j})
+        pares.append(
+            {
                 "correo_1": datos[i]["correo"],
                 "correo_2": datos[mejor_j]["correo"],
                 "nombre_1": datos[i]["nombre"],
                 "nombre_2": datos[mejor_j]["nombre"],
                 "perfil_1": datos[i]["perfil_ia"],
                 "perfil_2": datos[mejor_j]["perfil_ia"],
-                "score": round(mejor_sim, 2)
-            })
+                "score": round(mejor_sim, 2),
+            }
+        )
+
     return pares
+
+# ──────────────────── FLASK HELPERS ─────────────────────
 
 
 @app.before_request
 def make_session_permanent():
     session.permanent = True
+
 
 def login_required(view):
     @wraps(view)
@@ -164,8 +200,34 @@ def login_required(view):
         if "jugador" not in session:
             return redirect(url_for("login", next=request.path))
         return view(*args, **kwargs)
+
     return wrapped
 
+# ──────────── GPT helper ─────────────
+
+def explicar_match_gpt(perfil1: str, perfil2: str, score: float) -> str:
+    """Genera explicación breve vía GPT. Devuelve `None` si falla."""
+
+    prompt = (
+        "Eres un coach de networking.\n"
+        f"Persona A:\n{perfil1}\n\n"
+        f"Persona B:\n{perfil2}\n\n"
+        f"Similaridad global: {score:.2f}\n\n"
+        "Genera un párrafo de 3‑4 líneas explicando por qué harían una buena conexión "
+        "y sugiere un tema concreto para iniciar la conversación."
+    )
+
+    try:
+        resp = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=120,
+            temperature=0.7,
+        )
+        return resp.choices[0].message.content.strip()
+    except OpenAIError as e:
+        print("⚠️  GPT error:", e)
+        return None
 
 # ───────────────────────── LOGIN ──────────────────────────
 
@@ -231,7 +293,8 @@ def index():
     qr_conn.close()
     return render_template("index.html", retos=retos, ranking_qr=ranking_qr, modo_foto_equipo=False)
 
-# ───────────────────── RETO “CONÓCETE” ───────────────────
+# --------------------------- CONÓCETE MEJOR ---------------------------
+
 
 @app.route("/conocete_mejor", methods=["GET", "POST"])
 @login_required
@@ -239,15 +302,16 @@ def conocete_mejor():
     if request.method == "GET":
         conn = get_db_connection()
         ya = conn.execute(
-            "SELECT 1 FROM conexion_alfa_respuestas WHERE correo=?",
-            (session["correo"],)
-        ).fetchone(); conn.close()
+            "SELECT 1 FROM conexion_alfa_respuestas WHERE correo = ?",
+            (session["correo"],),
+        ).fetchone()
+        conn.close()
         return render_template("preguntas_post_login.html", ya_respondio=bool(ya))
 
-    # POST ─ guardar respuestas
-    f = request.form.get  # alias
-    nombre  = session["jugador"]
-    correo  = session["correo"]
+    f = request.form.get
+    nombre = session["jugador"]
+    correo = session["correo"]
+
     data = {
         "r2": f("r2", "").strip(),
         "r3": f("r3", "").strip(),
@@ -257,32 +321,57 @@ def conocete_mejor():
         "r9": f("r9", "").strip(),
         "r10": f("r10", "").strip(),
         "r12_mascota": f("r12", "").strip(),
-        "r13_hijos":   f("r13", "").strip(),
+        "r13_hijos": f("r13", "").strip(),
     }
 
     perfil = generar_perfil_ia(
         nombre,
-        dato_curioso=data["r3"], pelicula=data["r4"], deporte=data["r6"],
-        prenda=data["r8"], concierto=data["r9"], pasion=data["r2"],
-        libro=data["r10"], mascota=data["r12_mascota"], hijos=data["r13_hijos"]
+        dato_curioso=data["r3"],
+        pelicula=data["r4"],
+        deporte=data["r6"],
+        prenda=data["r8"],
+        concierto=data["r9"],
+        pasion=data["r2"],
+        libro=data["r10"],
+        mascota=data["r12_mascota"],
+        hijos=data["r13_hijos"],
     )
 
     conn = get_db_connection()
-    conn.execute("""
+    conn.execute(
+        """
         INSERT OR REPLACE INTO conexion_alfa_respuestas (
-            correo,nombre,r2,r3,r4,r6,r8,r9,r10,r12_mascota,r13_hijos,perfil_ia)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
-        correo, nombre,
-        data["r2"], data["r3"], data["r4"], data["r6"], data["r8"], data["r9"],
-        data["r10"], data["r12_mascota"], data["r13_hijos"], perfil
-    ))
-    conn.commit(); conn.close()
+            correo, nombre,
+            r2, r3, r4, r6, r8, r9, r10,
+            r12_mascota, r13_hijos,
+            perfil_ia
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+        """,
+        (
+            correo,
+            nombre,
+            data["r2"],
+            data["r3"],
+            data["r4"],
+            data["r6"],
+            data["r8"],
+            data["r9"],
+            data["r10"],
+            data["r12_mascota"],
+            data["r13_hijos"],
+            perfil,
+        ),
+    )
+    conn.commit()
+    conn.close()
 
     flash("✅ Respuestas guardadas. ¡Gracias!")
     return redirect(url_for("index"))
 
-# ------- Generar Matches (admin) -------------------------------------------
+
+# --------------------- GENERAR MATCHES (ADMIN) ----------------------
+
+
 @app.route("/generar_matches_conexion_alfa", methods=["POST"])
 def generar_matches_conexion_alfa():
     if "jugador" not in session:
@@ -290,35 +379,57 @@ def generar_matches_conexion_alfa():
 
     conn = get_db_connection()
     datos = conn.execute("SELECT * FROM conexion_alfa_respuestas").fetchall()
+
     if len(datos) < 2:
         flash("❌ Mínimo 2 participantes para generar matches.")
-        conn.close(); return redirect("/admin_panel")
+        conn.close()
+        return redirect("/admin_panel")
 
     pares = hacer_matches(datos)
 
-    # Guardar evitando duplicados
-    ya = set(tuple(sorted(p[:2])) for p in conn.execute(
-        "SELECT correo_1, correo_2 FROM conexion_alfa_matches").fetchall())
+    # evitar duplicados
+    ya = {
+        tuple(sorted(p[:2]))
+        for p in conn.execute(
+            "SELECT correo_1, correo_2 FROM conexion_alfa_matches"
+        ).fetchall()
+    }
 
     nuevos = 0
     for p in pares:
         key = tuple(sorted((p["correo_1"], p["correo_2"])))
-        if key in ya: continue
-        conn.execute("""
+        if key in ya:
+            continue
+
+        razon = explicar_match_gpt(p["perfil_1"], p["perfil_2"], p["score"]) or (
+            f"🤖 Match IA · similitud {p['score'] * 100:.0f}%"
+        )
+
+        conn.execute(
+            """
             INSERT INTO conexion_alfa_matches (
-              correo_1, correo_2, nombre_1, nombre_2, perfil_1, perfil_2, razon_match)
-            VALUES (?,?,?,?,?,?,?)
-        """, (
-            p["correo_1"], p["correo_2"], p["nombre_1"], p["nombre_2"],
-            p["perfil_1"], p["perfil_2"],
-            f"🤖 Match IA · similitud {p['score']*100:.0f}%"
-        ))
+                correo_1, correo_2, nombre_1, nombre_2,
+                perfil_1, perfil_2, razon_match
+            ) VALUES (?,?,?,?,?,?,?)
+            """,
+            (
+                p["correo_1"],
+                p["correo_2"],
+                p["nombre_1"],
+                p["nombre_2"],
+                p["perfil_1"],
+                p["perfil_2"],
+                razon,
+            ),
+        )
         nuevos += 1
-    conn.commit(); conn.close()
+
+    conn.commit()
+    conn.close()
 
     flash(f"✅ {nuevos} matches generados con éxito (modelo OpenAI).")
     return redirect("/admin_panel")
-
+    
 @app.route('/reset_ranking_qr', methods=['POST'])
 def reset_ranking_qr():
     conn_qr = sqlite3.connect('scan_points.db')
@@ -1020,6 +1131,7 @@ def conexion_alfa_mi_perfil():
     conn.close()
     return render_template("conexion_alfa_perfil.html", perfil=perfil)
 
+# ----------------- CONEXIÓN ALFA – Matches -----------------
 @app.route('/conexion_alfa_matches', methods=['GET'])
 def conexion_alfa_matches():
     if 'correo' not in session:
@@ -1027,62 +1139,107 @@ def conexion_alfa_matches():
 
     correo_usuario = session['correo']
     conn = get_db_connection()
+
+    # 1. Leer todas las respuestas de los participantes
     datos = conn.execute("SELECT * FROM conexion_alfa_respuestas").fetchall()
 
-    textos = []
-    correos = []
-    nombres = []
-    perfiles = []
+    textos, correos, nombres, perfiles = [], [], [], []
     for row in datos:
-        respuestas = [row[f"r{i}"] for i in range(1, 8)]
-        texto = " ".join(respuestas)
-        textos.append(texto)
+        # Tomamos todas las respuestas r1…r13 (si existen) y las unimos
+        respuestas = [row.get(f"r{i}", "") or "" for i in range(1, 14)]
+        textos.append(" ".join(respuestas))
         correos.append(row["correo"])
         nombres.append(row["nombre"])
         perfiles.append(row["perfil_ia"])
 
-    vectores = vectorizer_ia.transform(textos)
-    sim_matrix = cosine_similarity(vectores)
+    # 2. Vectorizar solo **una vez**
+    vectores = vectorizer_ia.transform(textos).toarray()
+    sim      = cosine_similarity(vectores)
 
-    # Evitar duplicados y guardar matches nuevos
-    ya_guardados = conn.execute("SELECT correo_1, correo_2 FROM conexion_alfa_matches").fetchall()
-    ya_guardados_set = set((min(r["correo_1"], r["correo_2"]), max(r["correo_1"], r["correo_2"])) for r in ya_guardados)
+    # 3. Pares ya guardados → evitar duplicados
+    ya_guardados = conn.execute(
+        "SELECT correo_1, correo_2 FROM conexion_alfa_matches"
+    ).fetchall()
+    ya_guardados_set = {
+        tuple(sorted((r["correo_1"], r["correo_2"]))) for r in ya_guardados
+    }
 
+    # 4. Bucle “greedy”: cada persona con su par más similar no usado
+    usados = set()
     for i in range(len(correos)):
-        for j in range(i+1, len(correos)):
-            correo1, correo2 = correos[i], correos[j]
-            nombre1, nombre2 = nombres[i], nombres[j]
-            perfil1, perfil2 = perfiles[i], perfiles[j]
-            pareja = (min(correo1, correo2), max(correo1, correo2))
-            if pareja not in ya_guardados_set:
-                conn.execute('''
-                    INSERT INTO conexion_alfa_matches (correo_1, correo_2, nombre_1, nombre_2, perfil_1, perfil_2)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                ''', (correo1, correo2, nombre1, nombre2, perfil1, perfil2))
-                conn.commit()
+        if i in usados:
+            continue
 
-    matches = conn.execute('''
+        mejor_j, mejor_sim = None, -1
+        for j in range(i + 1, len(correos)):
+            if j in usados:
+                continue
+            if sim[i, j] > mejor_sim:
+                mejor_sim = sim[i, j]
+                mejor_j   = j
+
+        if mejor_j is None:
+            continue
+
+        correo1, correo2 = correos[i], correos[mejor_j]
+        pareja           = tuple(sorted((correo1, correo2)))
+        if pareja in ya_guardados_set:
+            continue      # ya existe en la base
+
+        # Explicación sencilla (puedes cambiar por `explicar_match_gpt` si lo prefieres)
+        razon = f"🤖 Compatibilidad IA {mejor_sim*100:.0f}%"
+
+        conn.execute(
+            """
+            INSERT INTO conexion_alfa_matches
+                  (correo_1, correo_2, nombre_1, nombre_2, perfil_1, perfil_2, razon_match)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                correo1, correo2,
+                nombres[i], nombres[mejor_j],
+                perfiles[i], perfiles[mejor_j],
+                razon,
+            ),
+        )
+        usados.update({i, mejor_j})
+
+    conn.commit()
+
+    # 5. Matches propios para mostrar
+    matches = conn.execute(
+        """
         SELECT * FROM conexion_alfa_matches
         WHERE correo_1 = ? OR correo_2 = ?
-    ''', (correo_usuario, correo_usuario)).fetchall()
+        """,
+        (correo_usuario, correo_usuario),
+    ).fetchall()
 
-    # Métricas IA
-    feedbacks = conn.execute("SELECT feedback FROM conexion_alfa_matches WHERE feedback IS NOT NULL").fetchall()
-    total = len(feedbacks)
-    positivos = sum(f["feedback"] == 1 for f in feedbacks)
-    negativos = sum(f["feedback"] == 0 for f in feedbacks)
+    # 6. Métricas de feedback
+    feedbacks = conn.execute(
+        "SELECT feedback FROM conexion_alfa_matches WHERE feedback IS NOT NULL"
+    ).fetchall()
+    total      = len(feedbacks)
+    positivos  = sum(f["feedback"] == 1 for f in feedbacks)
+    negativos  = sum(f["feedback"] == 0 for f in feedbacks)
 
-    if total > 0:
-        accuracy = round(positivos / total, 2)
-        precision = round(positivos / (positivos + negativos), 2) if (positivos + negativos) > 0 else 0
-        recall = round(positivos / total, 2)
-        f1 = round(2 * (precision * recall) / (precision + recall), 2) if (precision + recall) > 0 else 0
+    if total:
+        accuracy  = round(positivos / total, 2)
+        precision = round(positivos / (positivos + negativos), 2) if (positivos + negativos) else 0
+        recall    = round(positivos / total, 2)
+        f1        = round(2 * precision * recall / (precision + recall), 2) if (precision + recall) else 0
     else:
         accuracy = precision = recall = f1 = None
 
     conn.close()
-    return render_template("conexion_alfa_matches.html", matches=matches,
-                           accuracy=accuracy, precision=precision, recall=recall, f1=f1)
+    return render_template(
+        "conexion_alfa_matches.html",
+        matches=matches,
+        accuracy=accuracy,
+        precision=precision,
+        recall=recall,
+        f1=f1,
+    )
 
 @app.route('/confirmar_match', methods=['POST'])
 def confirmar_match():
