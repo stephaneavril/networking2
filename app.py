@@ -19,8 +19,6 @@ from flask import (
 from openai import OpenAI, OpenAIError
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
-from sklearn.metrics.pairwise import cosine_similarity
-import joblib
 
 # ───────────────────────── CONFIG ─────────────────────────
 load_dotenv()
@@ -87,7 +85,26 @@ def ensure_schema():
 ensure_schema()
 
 # ─────────────────────── MODELO IA ───────────────────────
-vectorizer_ia = joblib.load("vectorizer_ia.pkl")
+# ─── Vectorizador IA ──────────────────────────────────────────────────────────
+from pathlib import Path
+from sklearn.feature_extraction.text import TfidfVectorizer
+import joblib
+
+MODEL_PATH = Path(__file__).with_name("vectorizer_ia.pkl")
+
+def load_vectorizer():
+    """
+    Intenta cargar el modelo entrenado.  
+    Si no existe aún, crea un vectorizador vacío para que la app no se caiga.
+    """
+    if MODEL_PATH.exists():
+        print("✓ vectorizer_ia.pkl encontrado, cargado correctamente.")
+        return joblib.load(MODEL_PATH)
+    else:
+        print("⚠️  vectorizer_ia.pkl no encontrado → usando vectorizador vacío.")
+        return TfidfVectorizer().fit(["placeholder"])
+
+vectorizer_ia = load_vectorizer()
 
 
 # ─────────────────────── UTILIDADES ──────────────────────
@@ -1325,7 +1342,6 @@ def conexion_alfa_match():
 
 @app.route('/api/conexion_alfa_match', methods=['POST'])
 def api_conexion_alfa_match():
-    from sklearn.metrics.pairwise import cosine_similarity
 
     data = request.get_json()
     participantes = data.get("participantes", [])
