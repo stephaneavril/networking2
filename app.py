@@ -151,57 +151,47 @@ def build_similarity(vecs: List[List[float]]) -> List[List[float]]:
     return (M @ M.T).tolist()
 
 
-# ---------- Emparejamiento Greedy (CORREGIDO) -------------------------------
+# ---------- Emparejamiento Greedy ------------------------------------------
 def hacer_matches(datos: List[sqlite3.Row]) -> List[Dict]:
     """
-    Devuelve una lista de pares de participantes con la mejor similitud coseno.
-    Cada elemento del return es:
-      {
-         correo_1, correo_2, nombre_1, nombre_2,
-         perfil_1, perfil_2, score
-      }
+    Empareja participantes usando embeddings OpenAI.
+    Devuelve una lista de pares con su similitud.
     """
-    def g(row, key):
-        """Devuelve el valor de la columna o cadena vacía si no existe/None."""
-        return (dict(row).get(key) or "").strip()
-
-    # 1. Preparar todos los textos para embeddings
-    texts = [
+    textos = [
         " ".join([
-            g(d, "r3"),          # dato curioso
-            g(d, "r4"),          # película favorita
-            g(d, "r6"),          # deporte favorito
-            g(d, "r8"),          # prenda imprescindible
-            g(d, "r9"),          # mejor concierto
-            g(d, "r2"),          # pasión
-            g(d, "r10"),         # libro/arte
-            g(d, "r12_mascota"), # mascota
-            g(d, "r13_hijos"),   # hijos
+            d["r3"]  or "",   # dato curioso
+            d["r4"]  or "",   # película favorita
+            d["r6"]  or "",   # deporte favorito
+            d["r8"]  or "",   # prenda imprescindible
+            d["r9"]  or "",   # mejor concierto
+            d["r2"]  or "",   # pasión
+            d["r10"] or "",   # libro/arte
+            d["r12_mascota"] or "",
+            d["r13_hijos"]   or "",
         ]).lower()
         for d in datos
     ]
 
-    embeddings = [embed_text(t) for t in texts]
-    S = build_similarity(embeddings)   # matriz de similitud coseno
+    embeddings = [embed_text(t) for t in textos]
+    S = build_similarity(embeddings)
 
-    # 2. Emparejamiento greedy
     n = len(datos)
-    usados = set()
-    pares  = []
+    usados: set[int] = set()
+    pares: list[Dict] = []
 
     for i in range(n):
         if i in usados:
             continue
-        mejor_j  = None
-        mejor_sc = -1
+
+        mejor_j, mejor_sim = None, -1.0
         for j in range(n):
             if j == i or j in usados:
                 continue
-            if S[i][j] > mejor_sc:
-                mejor_j, mejor_sc = j, S[i][j]
+            if S[i][j] > mejor_sim:
+                mejor_j, mejor_sim = j, S[i][j]
 
         if mejor_j is not None:
-            usados |= {i, mejor_j}
+            usados.update({i, mejor_j})
             pares.append({
                 "correo_1": datos[i]["correo"],
                 "correo_2": datos[mejor_j]["correo"],
@@ -209,7 +199,7 @@ def hacer_matches(datos: List[sqlite3.Row]) -> List[Dict]:
                 "nombre_2": datos[mejor_j]["nombre"],
                 "perfil_1": datos[i]["perfil_ia"],
                 "perfil_2": datos[mejor_j]["perfil_ia"],
-                "score":    round(mejor_sc, 2),
+                "score":    round(float(mejor_sim), 2),
             })
 
     return pares
