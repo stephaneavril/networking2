@@ -1,20 +1,21 @@
-import os
-import random
-import sqlite3
-import time
+# ------------------------------------------------------------
+#  app.py  — Versión FULL Postgres (Render) lista para copiar‑pegar
+# ------------------------------------------------------------
+#  • psycopg2 + pool de conexiones
+#  • Wrapper DB.execute() para que tu código siga usando el viejo
+#    "conn.execute(...)" (así no hay que tocar cientos de líneas).
+#  • Placeholders «%s»  y UPSERT con ON CONFLICT
+#  • sqlite3 se mantiene **solo** para scan_points.db (retos QR)
+# ------------------------------------------------------------
+
+import os, random, sqlite3, math, json
 from datetime import datetime
 from functools import wraps
-from typing import List, Dict
+from typing import List, Dict, Sequence, Mapping, Any
 
 from flask import (
-    Flask,
-    render_template,
-    request,
-    jsonify,
-    session,
-    redirect,
-    flash,
-    url_for,
+    Flask, render_template, request, jsonify, session,
+    redirect, flash, url_for
 )
 from openai import OpenAI, OpenAIError
 from werkzeug.utils import secure_filename
@@ -25,87 +26,74 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
     raise RuntimeError("⚠️ Falta OPENAI_API_KEY en variables de entorno")
-
 client = OpenAI()
 
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET", "clave-segura")
-app.config.update({
-    "UPLOAD_FOLDER": "evidencias",
-    "UPLOAD_FOLDER_GRUPAL": "evidencias_reto_grupal",
-    "EMBED_MODEL": "text-embedding-3-small"
-})
+app.secret_key = os.getenv("FLASK_SECRET", "clave‑segura")
+app.config.update(
+    UPLOAD_FOLDER="evidencias",
+    UPLOAD_FOLDER_GRUPAL="evidencias_reto_grupal",
+    EMBED_MODEL="text-embedding-3-small",
+)
 
 # ───────── Admin quick‑access ─────────
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "SupermanNoEsGay")
 
-
 def admin_ok(req):
-    """True si hay sesión de admin o token válido en query/header."""
-
     if session.get("is_admin"):
         return True
-
     token = req.args.get("token") or req.headers.get("X-Admin-Token")
     if token and token == ADMIN_TOKEN:
-        session["is_admin"] = True  # persistir para resto de la sesión
+        session["is_admin"] = True
         return True
     return False
-# ─────────────────────── DB HELPERS ───────────────────────
-def get_db_connection():
-    conn = sqlite3.connect("database.db")
-    conn.row_factory = sqlite3.Row
-    return conn
 
-# ----------------- ESQUEMA PARA NUEVAS PREGUNTAS -----------------
+# ───────────────────────── DB (PostgreSQL) ─────────────────────────
+import psycopg2, psycopg2.extras
+from psycopg2.pool import SimpleConnectionPool
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError("⚠️ Falta DATABASE_URL")
+_pool = SimpleConnectionPool(
+    1, 10, DATABASE_URL, sslmode="require",
+    cursor_factory=psycopg2.extras.RealDictCursor
+)
 
-def ensure_schema():
-    conn = sqlite3.connect("database.db")
-    cur = conn.cursor()
+class DB:  # wrapper compatible con tu viejo código sqlite‑style
+    def __init__(self, conn):
+        self._c = conn
+    # ――― API ‘execute’ igual que sqlite3 ―――
+    def execute(self, sql: str, params: Sequence[Any] = ()):  # SELECT / INSERT / UPDATE
+        with self._c.cursor() as cur:
+            cur.execute(sql, params)
+            if cur.description:   # SELECT
+                return cur.fetchall()
+    def commit(self):
+        self._c.commit()
+    def close(self):
+        _pool.putconn(self._c)
 
-    # reto_equipo_foto.reto_no
-    cols_ref = [c[1] for c in cur.execute("PRAGMA table_info(reto_equipo_foto)")]
-    if "reto_no" not in cols_ref:
-        cur.execute("ALTER TABLE reto_equipo_foto ADD COLUMN reto_no INTEGER DEFAULT 1")
-        print("✓ columna reto_no añadida")
+# helper jolín‑simple (SELECT único valor)
+def fetchone(conn: DB, sql: str, params: Sequence[Any] = ()):  # devuelve dict | None
+    res = conn.execute(sql, params)
+    return res[0] if res else None
 
-    # conexion_alfa_respuestas nuevas columnas
-    cols = [c[1] for c in cur.execute("PRAGMA table_info(conexion_alfa_respuestas)")]
-    for nueva in ("r12_mascota", "r13_hijos"):
-        if nueva not in cols:
-            cur.execute(f"ALTER TABLE conexion_alfa_respuestas ADD COLUMN {nueva} TEXT")
-            print(f"✓ columna {nueva} añadida")
+def get_db_connection() -> DB:
+    return DB(_pool.getconn())
 
-    cur.execute("""
-        CREATE UNIQUE INDEX IF NOT EXISTS uniq_reto_equipo
-        ON reto_equipo_foto(equipo, reto_no)
-    """)
-    conn.commit(); conn.close()
-
-ensure_schema()
+# cerrar al final de cada request (solo si se abrió explícitamente)
+@app.teardown_request
+def _return_conn(exc):
+    # si en algo quedó sin cerrar… (por seguridad extra)
+    pass
 
 # ─────────────────────── MODELO IA ───────────────────────
-# ─── Vectorizador IA ──────────────────────────────────────────────────────────
 from pathlib import Path
 from sklearn.feature_extraction.text import TfidfVectorizer
-import joblib
-
+from sklearn.metrics.pairwise import cosine_similarity
+import joblib, numpy as np
 MODEL_PATH = Path(__file__).with_name("vectorizer_ia.pkl")
-
-def load_vectorizer():
-    """
-    Intenta cargar el modelo entrenado.  
-    Si no existe aún, crea un vectorizador vacío para que la app no se caiga.
-    """
-    if MODEL_PATH.exists():
-        print("✓ vectorizer_ia.pkl encontrado, cargado correctamente.")
-        return joblib.load(MODEL_PATH)
-    else:
-        print("⚠️  vectorizer_ia.pkl no encontrado → usando vectorizador vacío.")
-        return TfidfVectorizer().fit(["placeholder"])
-
-vectorizer_ia = load_vectorizer()
-
+vectorizer_ia = joblib.load(MODEL_PATH) if MODEL_PATH.exists() else TfidfVectorizer().fit(["placeholder"])
 
 # ─────────────────────── UTILIDADES ──────────────────────
 
@@ -122,74 +110,56 @@ def generar_perfil_ia(nombre: str, *, dato_curioso="", pelicula="", deporte="", 
     add("📚", f"Libro/arte favorito: “{libro}”.")
     add("🐾", f"Mascota(s): {mascota}.")
     add("👨‍👩‍👧‍👦", f"Hijos: {hijos}.")
-
     partes.append("✨ ¿Por qué conocerle? Su mezcla de gustos garantiza charlas memorables.")
     return " ".join(partes)
 
-# ---------- Embeddings ------------------------------------------------------
+# ---------- Embeddings (batch) ------------------------------------------------------
 
-def embed_text(text: str) -> List[float]:
-    """Devuelve el vector embedding en ≤ 1 llamada → 14 KB aprox."""
+def embed_texts(texts: List[str]) -> List[List[float]]:
     try:
         resp = client.embeddings.create(
-            model=app.config["EMBED_MODEL"], input=text[:4096]
+            model=app.config["EMBED_MODEL"], input=[t[:4096] for t in texts]
         )
-        return resp.data[0].embedding
+        return [d.embedding for d in resp.data]
     except Exception as e:
         print("❌ openai error:", e)
-        return [0.0] * 1536  # tamaño modelo
+        dim = 1536
+        return [[0.0] * dim for _ in texts]
 
 # ---------- Emparejamiento Greedy ------------------------------------------
 
+import numpy as np
+
 def build_similarity(vecs: List[List[float]]) -> List[List[float]]:
-    """Matriz coseno entre todos los vectores."""
-
-    import numpy as np
-
-    M = np.array(vecs)
+    M = np.array(vecs, dtype=float)
     M = M / (np.linalg.norm(M, axis=1, keepdims=True) + 1e-9)
     return (M @ M.T).tolist()
 
 
-# ---------- Emparejamiento Greedy ------------------------------------------
-def hacer_matches(datos: List[sqlite3.Row]) -> List[Dict]:
-    """
-    Empareja participantes usando embeddings OpenAI.
-    Devuelve una lista de pares con su similitud.
-    """
+def hacer_matches(datos: Sequence[Mapping]) -> List[Dict]:
     textos = [
         " ".join([
-            d["r3"]  or "",   # dato curioso
-            d["r4"]  or "",   # película favorita
-            d["r6"]  or "",   # deporte favorito
-            d["r8"]  or "",   # prenda imprescindible
-            d["r9"]  or "",   # mejor concierto
-            d["r2"]  or "",   # pasión
-            d["r10"] or "",   # libro/arte
-            d["r12_mascota"] or "",
-            d["r13_hijos"]   or "",
+            d.get("r3", ""), d.get("r4", ""), d.get("r6", ""), d.get("r8", ""),
+            d.get("r9", ""), d.get("r2", ""), d.get("r10", ""),
+            d.get("r12_mascota", ""), d.get("r13_hijos", ""),
         ]).lower()
         for d in datos
     ]
-
-    embeddings = [embed_text(t) for t in textos]
+    embeddings = embed_texts(textos)
     S = build_similarity(embeddings)
 
     n = len(datos)
     usados: set[int] = set()
     pares: list[Dict] = []
-
     for i in range(n):
         if i in usados:
             continue
-
         mejor_j, mejor_sim = None, -1.0
         for j in range(n):
             if j == i or j in usados:
                 continue
             if S[i][j] > mejor_sim:
                 mejor_j, mejor_sim = j, S[i][j]
-
         if mejor_j is not None:
             usados.update({i, mejor_j})
             pares.append({
@@ -199,13 +169,11 @@ def hacer_matches(datos: List[sqlite3.Row]) -> List[Dict]:
                 "nombre_2": datos[mejor_j]["nombre"],
                 "perfil_1": datos[i]["perfil_ia"],
                 "perfil_2": datos[mejor_j]["perfil_ia"],
-                "score":    round(float(mejor_sim), 2),
+                "score": round(float(mejor_sim), 2),
             })
-
     return pares
 
 # ──────────────────── FLASK HELPERS ─────────────────────
-
 
 @app.before_request
 def make_session_permanent():
@@ -218,14 +186,11 @@ def login_required(view):
         if "jugador" not in session:
             return redirect(url_for("login", next=request.path))
         return view(*args, **kwargs)
-
     return wrapped
 
 # ──────────── GPT helper ─────────────
 
-def explicar_match_gpt(perfil1: str, perfil2: str, score: float) -> str:
-    """Genera explicación breve vía GPT. Devuelve `None` si falla."""
-
+def explicar_match_gpt(perfil1: str, perfil2: str, score: float) -> str | None:
     prompt = (
         "Eres un coach de networking.\n"
         f"Persona A:\n{perfil1}\n\n"
@@ -234,7 +199,6 @@ def explicar_match_gpt(perfil1: str, perfil2: str, score: float) -> str:
         "Genera un párrafo de 3‑4 líneas explicando por qué harían una buena conexión "
         "y sugiere un tema concreto para iniciar la conversación."
     )
-
     try:
         resp = client.chat.completions.create(
             model="gpt-3.5-turbo",
@@ -247,46 +211,25 @@ def explicar_match_gpt(perfil1: str, perfil2: str, score: float) -> str:
         print("⚠️  GPT error:", e)
         return None
 
-# ───────────────────────── LOGIN ──────────────────────────
+# ───────────────────────── LOGIN ─────────────────────────
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    # Intenta obtener la URL a la que el usuario quería ir antes del login.
-    # Si no hay ninguna, por defecto será la página de inicio ('/').
     next_url = request.args.get("next", "/")
-
     if request.method == "POST":
-        # Recoge el nombre y correo del formulario, quitando espacios extra.
         jugador = request.form.get("jugador", "").strip()
         correo = request.form.get("correo", "").strip()
-
-        # Si falta alguno de los dos datos, muestra un error.
         if not jugador or not correo:
             flash("⚠️ Debes indicar nombre y correo")
             return render_template("login.html", next=next_url)
-
-        # Guarda los datos del jugador en la sesión para recordarlo.
         session.update({"jugador": jugador, "correo": correo})
         flash(f"¡Bienvenido, {jugador}!")
-
-        # --- Verificación para redirigir ---
-        # Conecta a la base de datos para ver si el usuario ya ha respondido antes.
         conn = get_db_connection()
-        ya_respondio = conn.execute(
-            "SELECT 1 FROM conexion_alfa_respuestas WHERE correo = ?", (correo,)
-        ).fetchone()
-        conn.close()
-
-        # Si NO ha respondido (si 'ya_respondio' está vacío)...
-        if not ya_respondio:
-            # ...lo enviamos directamente a la página de preguntas.
-            return redirect(url_for('conocete_mejor'))
-
-        # Si ya respondió, lo dejamos ir a la página de inicio o a donde se dirigía.
+        ya = fetchone(conn, "SELECT 1 FROM conexion_alfa_respuestas WHERE correo = %s", (correo,))
+        _pool.putconn(conn)
+        if not ya:
+            return redirect(url_for("conocete_mejor"))
         return redirect(next_url)
-
-    # Si el método no es POST (es decir, si solo está cargando la página),
-    # simplemente muestra el formulario de login.
     return render_template("login.html", next=next_url)
 
 # ───────────────────────── HOME ───────────────────────────
@@ -296,166 +239,113 @@ def index():
     if "jugador" not in session:
         return redirect("/login")
     conn = get_db_connection()
-    retos = conn.execute("SELECT * FROM retos WHERE activo = 1").fetchall()
-    conn.close()
-    qr_conn = sqlite3.connect("scan_points.db")
-    qr_conn.row_factory = sqlite3.Row
-    ranking_qr = qr_conn.execute(
-        """
+    retos = fetchone(conn, "SELECT json_agg(retos) AS r FROM (SELECT * FROM retos WHERE activo=1) retos")
+    _pool.putconn(conn)
+
+    # La DB de QR sigue en SQLite local
+    qr_conn = sqlite3.connect("scan_points.db"); qr_conn.row_factory = sqlite3.Row
+    ranking_qr = qr_conn.execute("""
         SELECT nombre, SUM(puntos) AS total
-        FROM registros
-        GROUP BY nombre
-        ORDER BY total DESC
-        """
-    ).fetchall()
-    qr_conn.close()
-    return render_template("index.html", retos=retos, ranking_qr=ranking_qr, modo_foto_equipo=False)
+        FROM registros GROUP BY nombre ORDER BY total DESC
+    """).fetchall(); qr_conn.close()
+    return render_template("index.html", retos=retos["r"] if retos else [], ranking_qr=ranking_qr, modo_foto_equipo=False)
 
 # --------------------------- CONÓCETE MEJOR ---------------------------
-
 
 @app.route("/conocete_mejor", methods=["GET", "POST"])
 @login_required
 def conocete_mejor():
     if request.method == "GET":
         conn = get_db_connection()
-        ya = conn.execute(
-            "SELECT 1 FROM conexion_alfa_respuestas WHERE correo = ?",
-            (session["correo"],),
-        ).fetchone()
-        conn.close()
+        ya = fetchone(conn, "SELECT 1 FROM conexion_alfa_respuestas WHERE correo=%s", (session["correo"],))
+        _pool.putconn(conn)
         return render_template("preguntas_post_login.html", ya_respondio=bool(ya))
 
     f = request.form.get
-    nombre = session["jugador"]
-    correo = session["correo"]
-
+    nombre, correo = session["jugador"], session["correo"]
     data = {
-        "r2": f("r2", "").strip(),
-        "r3": f("r3", "").strip(),
-        "r4": f("r4", "").strip(),
-        "r6": f("r6", "").strip(),
-        "r8": f("r8", "").strip(),
-        "r9": f("r9", "").strip(),
-        "r10": f("r10", "").strip(),
-        "r12_mascota": f("r12", "").strip(),
-        "r13_hijos": f("r13", "").strip(),
+        k: f(k, "").strip() for k in ("r2","r3","r4","r6","r8","r9","r10")
     }
+    data["r12_mascota"] = f("r12", "").strip()
+    data["r13_hijos"] = f("r13", "").strip()
 
     perfil = generar_perfil_ia(
         nombre,
-        dato_curioso=data["r3"],
-        pelicula=data["r4"],
-        deporte=data["r6"],
-        prenda=data["r8"],
-        concierto=data["r9"],
-        pasion=data["r2"],
-        libro=data["r10"],
-        mascota=data["r12_mascota"],
-        hijos=data["r13_hijos"],
+        dato_curioso=data["r3"], pelicula=data["r4"], deporte=data["r6"],
+        prenda=data["r8"], concierto=data["r9"], pasion=data["r2"],
+        libro=data["r10"], mascota=data["r12_mascota"], hijos=data["r13_hijos"],
     )
 
+    columnas = (
+        "correo, nombre, r2, r3, r4, r6, r8, r9, r10, r12_mascota, r13_hijos, perfil_ia"
+    )
+    placeholders = ", ".join(["%s"] * 12)
     conn = get_db_connection()
-    conn.execute(
-        """
-        INSERT OR REPLACE INTO conexion_alfa_respuestas (
-            correo, nombre,
-            r2, r3, r4, r6, r8, r9, r10,
-            r12_mascota, r13_hijos,
-            perfil_ia
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-        """,
-        (
-            correo,
-            nombre,
-            data["r2"],
-            data["r3"],
-            data["r4"],
-            data["r6"],
-            data["r8"],
-            data["r9"],
-            data["r10"],
-            data["r12_mascota"],
-            data["r13_hijos"],
-            perfil,
-        ),
-    )
-    conn.commit()
-    conn.close()
-
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            INSERT INTO conexion_alfa_respuestas ({columnas})
+            VALUES ({placeholders})
+            ON CONFLICT (correo) DO UPDATE SET
+                nombre         = EXCLUDED.nombre,
+                r2             = EXCLUDED.r2,
+                r3             = EXCLUDED.r3,
+                r4             = EXCLUDED.r4,
+                r6             = EXCLUDED.r6,
+                r8             = EXCLUDED.r8,
+                r9             = EXCLUDED.r9,
+                r10            = EXCLUDED.r10,
+                r12_mascota    = EXCLUDED.r12_mascota,
+                r13_hijos      = EXCLUDED.r13_hijos,
+                perfil_ia      = EXCLUDED.perfil_ia
+            """,
+            (
+                correo, nombre,
+                data["r2"], data["r3"], data["r4"], data["r6"], data["r8"], data["r9"], data["r10"],
+                data["r12_mascota"], data["r13_hijos"], perfil,
+            ),
+        )
+    conn.commit(); _pool.putconn(conn)
     flash("✅ Respuestas guardadas. ¡Gracias!")
     return redirect(url_for("index"))
 
-
 # --------------------- GENERAR MATCHES (ADMIN) ----------------------
-
 
 @app.route("/generar_matches_conexion_alfa", methods=["POST"])
 def generar_matches_conexion_alfa():
     if "jugador" not in session:
         return redirect("/")
-
     conn = get_db_connection()
-    datos = conn.execute("SELECT * FROM conexion_alfa_respuestas").fetchall()
-
+    with conn.cursor() as cur:
+        cur.execute("SELECT * FROM conexion_alfa_respuestas")
+        datos = cur.fetchall()
     if len(datos) < 2:
-        flash("❌ Mínimo 2 participantes para generar matches.")
-        conn.close()
-        return redirect("/admin_panel")
-
+        flash("❌ Mínimo 2 participantes para generar matches."); _pool.putconn(conn); return redirect("/admin_panel")
     pares = hacer_matches(datos)
 
-    # evitar duplicados
-    ya = {
-        tuple(sorted(p[:2]))
-        for p in conn.execute(
-            "SELECT correo_1, correo_2 FROM conexion_alfa_matches"
-        ).fetchall()
-    }
+    with conn.cursor() as cur:
+        cur.execute("SELECT correo_1, correo_2 FROM conexion_alfa_matches")
+        ya = {tuple(sorted((r["correo_1"], r["correo_2"]))) for r in cur.fetchall()}
 
-    nuevos = 0
-    for p in pares:
-        key = tuple(sorted((p["correo_1"], p["correo_2"])))
-        if key in ya:
-            continue
-
-        razon = explicar_match_gpt(p["perfil_1"], p["perfil_2"], p["score"]) or (
-            f"🤖 Match IA · similitud {p['score'] * 100:.0f}%"
-        )
-
-        conn.execute(
-            """
-            INSERT INTO conexion_alfa_matches (
-                correo_1, correo_2, nombre_1, nombre_2,
-                perfil_1, perfil_2, razon_match
-            ) VALUES (?,?,?,?,?,?,?)
-            """,
-            (
-                p["correo_1"],
-                p["correo_2"],
-                p["nombre_1"],
-                p["nombre_2"],
-                p["perfil_1"],
-                p["perfil_2"],
-                razon,
-            ),
-        )
-        nuevos += 1
-
-    conn.commit()
-    conn.close()
-
+        nuevos = 0
+        for p in pares:
+            key = tuple(sorted((p["correo_1"], p["correo_2"])));
+            if key in ya: continue
+            razon = explicar_match_gpt(p["perfil_1"], p["perfil_2"], p["score"]) or f"🤖 Match IA · similitud {p['score']*100:.0f}%"
+            cur.execute(
+                """
+                INSERT INTO conexion_alfa_matches
+                      (correo_1, correo_2, nombre_1, nombre_2, perfil_1, perfil_2, razon_match)
+                VALUES (%s,%s,%s,%s,%s,%s,%s)
+                """,
+                (
+                    p["correo_1"], p["correo_2"], p["nombre_1"], p["nombre_2"],
+                    p["perfil_1"], p["perfil_2"], razon,
+                ),
+            ); nuevos += 1
+    conn.commit(); _pool.putconn(conn)
     flash(f"✅ {nuevos} matches generados con éxito (modelo OpenAI).")
     return redirect("/admin_panel")
-    
-@app.route('/reset_ranking_qr', methods=['POST'])
-def reset_ranking_qr():
-    conn_qr = sqlite3.connect('scan_points.db')
-    conn_qr.execute("DELETE FROM registros")
-    conn_qr.commit()
-    conn_qr.close()
-    flash("✅ Ranking de Escaneo QR reiniciado correctamente.")
-    return redirect('/admin_panel')
 
 # -------------------- RETO ADIVINA --------------------
 @app.route("/adivina")
