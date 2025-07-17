@@ -350,23 +350,35 @@ def login():
 # ───────────────────────── HOME ───────────────────────────
 
 @app.route("/")
+@login_required
 def index():
-    if "jugador" not in session:
-        return redirect("/login")
+    # 1️⃣ Abrir conexión Postgres
+    conn = get_db_connection()
+
+    # 2️⃣ Retos activos
     retos = conn.execute(
-    "SELECT json_agg(retos) AS r "
-    "FROM (SELECT * FROM retos WHERE activo = 1) retos"
+        """
+        SELECT json_agg(retos) AS r
+        FROM (SELECT * FROM retos WHERE activo = 1) retos
+        """
     ).fetchone()
-    conn.close()      # devolvemos la conexión al pool
 
-
-    # La DB de QR sigue en SQLite local
+    # 3️⃣ Ranking QR (sigue en SQLite local)
     qr_conn = sqlite3.connect("scan_points.db"); qr_conn.row_factory = sqlite3.Row
     ranking_qr = qr_conn.execute("""
         SELECT nombre, SUM(puntos) AS total
         FROM registros GROUP BY nombre ORDER BY total DESC
-    """).fetchall(); qr_conn.close()
-    return render_template("index.html", retos=retos["r"] if retos else [], ranking_qr=ranking_qr, modo_foto_equipo=False)
+    """).fetchall()
+    qr_conn.close()
+
+    conn.close()   # 4️⃣ Devolver la conexión al pool
+
+    return render_template(
+        "index.html",
+        retos=retos["r"] if retos else [],
+        ranking_qr=ranking_qr,
+        modo_foto_equipo=False
+    )
 
 # --------------------------- CONÓCETE MEJOR ---------------------------
 
