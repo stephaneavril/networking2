@@ -125,7 +125,50 @@ SCHEMA_SQL = [
         UNIQUE (correo_1, correo_2)
     );
     """,
-    # TODO: añade aquí el resto de tablas (retos, reto_foto, evidencias, etc.)
+    """
+    CREATE TABLE IF NOT EXISTS retos (
+        id     SERIAL PRIMARY KEY,
+        nombre TEXT  NOT NULL UNIQUE,
+        tipo   TEXT  DEFAULT 'individual',   -- individual  / grupal
+        activo BOOLEAN DEFAULT FALSE
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS reto_foto (
+        id       SERIAL PRIMARY KEY,
+        correo   TEXT NOT NULL,
+        nombre   TEXT NOT NULL,
+        archivo  TEXT NOT NULL,
+        reto_id  INTEGER REFERENCES retos(id)
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS votos_reto_foto (
+        correo_votante TEXT    NOT NULL,
+        id_foto        INTEGER NOT NULL REFERENCES reto_foto(id),
+        puntos         SMALLINT,
+        PRIMARY KEY (correo_votante, id_foto)
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS reto_equipo_foto (
+        id                 SERIAL PRIMARY KEY,
+        nombre_participante TEXT,
+        correo             TEXT,
+        equipo             TEXT,
+        archivo            TEXT,
+        reto_no            INTEGER
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS evidencias (
+        id                 SERIAL PRIMARY KEY,
+        reto_id            INTEGER,
+        nombre_participante TEXT,
+        archivo            TEXT,
+        timestamp          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """
 ]
 
 def create_tables_if_needed() -> None:
@@ -281,7 +324,10 @@ def login():
         session.update({"jugador": jugador, "correo": correo})
         flash(f"¡Bienvenido, {jugador}!")
         conn = get_db_connection()
-        ya = fetchone(conn, "SELECT 1 FROM conexion_alfa_respuestas WHERE correo = %s", (correo,))
+        ya = conn.execute(
+        "SELECT 1 FROM conexion_alfa_respuestas WHERE correo = %s",
+        (correo,)
+        ).fetchone()           
         _pool.putconn(conn)
         if not ya:
             return redirect(url_for("conocete_mejor"))
