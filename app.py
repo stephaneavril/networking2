@@ -365,7 +365,6 @@ def login():
 # ───────────────────────── HOME ─────────────────────────
 @app.route("/")
 @login_required
-
 def index():
     # 1. conexión Postgres
     conn = get_db_connection()
@@ -932,7 +931,7 @@ def ver_fotos_reto_foto():
     # Obtener el reto activo del tipo 'individual' que se llame MI6 o Reto Foto
     reto = conn.execute('''
         SELECT * FROM retos
-        WHERE tipo = 'individual' AND activo = 1
+        WHERE tipo = 'individual' AND activo
         AND (nombre = 'Reto Foto' OR nombre LIKE 'MI6%')
         ORDER BY id ASC
         LIMIT 1
@@ -1099,7 +1098,7 @@ def ranking_fotos():
     else:
         reto = conn.execute('''
             SELECT * FROM retos
-            WHERE tipo = 'individual' AND activo = 1
+            WHERE tipo = 'individual' AND activo
             AND (nombre = 'Reto Foto' OR nombre LIKE 'MI6%')
             ORDER BY id ASC
             LIMIT 1
