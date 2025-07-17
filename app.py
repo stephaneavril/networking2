@@ -375,7 +375,7 @@ def index():
         conn,
         """
         SELECT json_agg(retos) AS r
-        FROM (SELECT * FROM retos WHERE activo = 1) AS retos
+        FROM (SELECT * FROM retos WHERE activo IS TRUE) AS retos
         """
     )
     retos_activos = row["r"] if row and row["r"] else []
