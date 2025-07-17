@@ -236,10 +236,10 @@ def embed_texts(texts: List[str]) -> List[List[float]]:
     Corta cada texto a 4096 chars para cumplir límites de OpenAI.
     """
     try:
-        resp = openai.Embedding.create(
-            model=app.config["EMBED_MODEL"],
-            input=[t[:4096] for t in texts]
-        )
+        resp = openai.embeddings.create(
+             model=app.config["EMBED_MODEL"],
+             input=[t[:4096] for t in texts]
+         )
         # Cada elemento de resp["data"] es un dict con clave "embedding"
         return [item["embedding"] for item in resp["data"]]
     except OpenAIError as e:
@@ -329,7 +329,7 @@ def explicar_match_gpt(perfil1: str, perfil2: str, score: float) -> str | None:
             max_tokens=120,
             temperature=0.7,
         )
-        return resp["choices"][0]["message"]["content"].strip()
+        return resp.choices[0].message.content.strip()
     except OpenAIError as e:
         print("⚠️  GPT error:", e)
         return None
@@ -498,7 +498,7 @@ def generar_matches_conexion_alfa():
                     p["perfil_1"], p["perfil_2"], razon,
                 ),
             ); nuevos += 1
-    conn.commit(); _conn.close()
+    conn.commit(); conn.close()
     flash(f"✅ {nuevos} matches generados con éxito (modelo OpenAI).")
     return redirect("/admin_panel")
 
@@ -1042,7 +1042,7 @@ def ver_fotos_mi6():
                         "INSERT INTO votos_reto_foto (correo_votante, id_foto, puntos) VALUES (?, ?, ?)",
                         (correo, id_foto, puntos)
                     )
-                except sqlite3.IntegrityError:
+                except psycopg2.IntegrityError:
                     continue
         conn.commit()
         flash("✅ ¡Tus votos han sido registrados!")
