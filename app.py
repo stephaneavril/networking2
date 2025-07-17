@@ -7,17 +7,19 @@ from flask import (
     Flask, render_template, request, jsonify, session,
     redirect, flash, url_for
 )
-from openai import OpenAI, OpenAIError
+
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 
 # ───────────────────────── CONFIG ─────────────────────────
+import openai
+from openai.error import OpenAIError
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
     raise RuntimeError("⚠️ Falta OPENAI_API_KEY en variables de entorno")
-client = OpenAI()
-
+# Inicializamos el API key en el SDK:
+openai.api_key = OPENAI_API_KEY
 app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET", "clave‑segura")
 app.config.update(
@@ -215,13 +217,21 @@ def generar_perfil_ia(nombre: str, *, dato_curioso="", pelicula="", deporte="", 
 # ---------- Embeddings (batch) ------------------------------------------------------
 
 def embed_texts(texts: List[str]) -> List[List[float]]:
+    """
+    Devuelve una lista de vectores de embedding para cada texto.
+    Corta cada texto a 4096 chars para cumplir límites de OpenAI.
+    """
     try:
-        resp = client.embeddings.create(
-            model=app.config["EMBED_MODEL"], input=[t[:4096] for t in texts]
+        resp = openai.Embedding.create(
+            model=app.config["EMBED_MODEL"],
+            input=[t[:4096] for t in texts]
         )
-        return [d.embedding for d in resp.data]
-    except Exception as e:
+        # Cada elemento de resp["data"] es un dict con clave "embedding"
+        return [item["embedding"] for item in resp["data"]]
+    except OpenAIError as e:
+        # Si falla la llamada a OpenAI, imprimimos el error y devolvemos vectores ceros
         print("❌ openai error:", e)
+        # Suponemos dimensión de 1536 (igual que `text-embedding-3-small`)
         dim = 1536
         return [[0.0] * dim for _ in texts]
 
@@ -299,13 +309,13 @@ def explicar_match_gpt(perfil1: str, perfil2: str, score: float) -> str | None:
         "y sugiere un tema concreto para iniciar la conversación."
     )
     try:
-        resp = client.chat.completions.create(
+        resp = openai.ChatCompletion.create(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=120,
             temperature=0.7,
         )
-        return resp.choices[0].message.content.strip()
+        return resp["choices"][0]["message"]["content"].strip()
     except OpenAIError as e:
         print("⚠️  GPT error:", e)
         return None
