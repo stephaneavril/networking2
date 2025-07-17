@@ -1,13 +1,3 @@
-# ------------------------------------------------------------
-#  app.py  — Versión FULL Postgres (Render) lista para copiar‑pegar
-# ------------------------------------------------------------
-#  • psycopg2 + pool de conexiones
-#  • Wrapper DB.execute() para que tu código siga usando el viejo
-#    "conn.execute(...)" (así no hay que tocar cientos de líneas).
-#  • Placeholders «%s»  y UPSERT con ON CONFLICT
-#  • sqlite3 se mantiene **solo** para scan_points.db (retos QR)
-# ------------------------------------------------------------
-
 import os, random, sqlite3, math, json
 from datetime import datetime
 from functools import wraps
@@ -51,41 +41,107 @@ def admin_ok(req):
 # ───────────────────────── DB (PostgreSQL) ─────────────────────────
 import psycopg2, psycopg2.extras
 from psycopg2.pool import SimpleConnectionPool
-DATABASE_URL = os.getenv("DATABASE_URL")
+from typing import Sequence, Any
+
+DATABASE_URL = os.getenv("DATABASE_URL")  # ej. export DATABASE_URL="postgresql://…"
 if not DATABASE_URL:
-    raise RuntimeError("⚠️ Falta DATABASE_URL")
+    raise RuntimeError("⚠️ Falta la variable DATABASE_URL")
+
 _pool = SimpleConnectionPool(
-    1, 10, DATABASE_URL, sslmode="require",
-    cursor_factory=psycopg2.extras.RealDictCursor
+    1, 10,
+    dsn=DATABASE_URL,
+    sslmode="require",
+    cursor_factory=psycopg2.extras.RealDictCursor,
 )
 
-class DB:  # wrapper compatible con tu viejo código sqlite‑style
+def _qmark_to_psycopg(sql: str) -> str:
+    """Convierte placeholders «? » estilo-SQLite → «%s» para psycopg2."""
+    # Ojo: no rompe los %s que ya estén escritos
+    partes = sql.split("?")
+    return "%s".join(partes) if len(partes) > 1 else sql
+
+class DB:
+    """Wrapper 100 % compatible con tu viejo `sqlite3.Connection`."""
     def __init__(self, conn):
         self._c = conn
-    # ――― API ‘execute’ igual que sqlite3 ―――
-    def execute(self, sql: str, params: Sequence[Any] = ()):  # SELECT / INSERT / UPDATE
-        with self._c.cursor() as cur:
-            cur.execute(sql, params)
-            if cur.description:   # SELECT
-                return cur.fetchall()
-    def commit(self):
-        self._c.commit()
-    def close(self):
-        _pool.putconn(self._c)
 
-# helper jolín‑simple (SELECT único valor)
-def fetchone(conn: DB, sql: str, params: Sequence[Any] = ()):  # devuelve dict | None
-    res = conn.execute(sql, params)
-    return res[0] if res else None
+    def execute(self, sql: str, params: Sequence[Any] = ()):
+        sql = _qmark_to_psycopg(sql)
+        cur = self._c.cursor()                        # RealDictCursor por default
+        cur.execute(sql, params)
+        return cur           # mantiene `.fetchone()` / `.fetchall()` vivos
+
+    def commit(self):  self._c.commit()
+    def cursor(self):  return self._c.cursor()       # para los bloques “with conn.cursor()”
+    def close(self):   _pool.putconn(self._c)
 
 def get_db_connection() -> DB:
     return DB(_pool.getconn())
 
-# cerrar al final de cada request (solo si se abrió explícitamente)
-@app.teardown_request
-def _return_conn(exc):
-    # si en algo quedó sin cerrar… (por seguridad extra)
-    pass
+# ─────────── Crear tablas automáticamente si no existen ────────────
+SCHEMA_SQL = [
+    """
+    CREATE TABLE IF NOT EXISTS adivina_participantes (
+        id                 SERIAL PRIMARY KEY,
+        nombre             TEXT  NOT NULL,
+        correo             TEXT  NOT NULL UNIQUE,
+        objetivo_2025      TEXT,
+        nivel_introversion INTEGER
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS adivina_resultados (
+        id              SERIAL PRIMARY KEY,
+        nombre_jugador  TEXT     NOT NULL,
+        aciertos        INTEGER  NOT NULL,
+        puntos_extra    INTEGER  NOT NULL,
+        timestamp       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS conexion_alfa_respuestas (
+        correo              TEXT PRIMARY KEY,
+        nombre              TEXT NOT NULL,
+        r2 TEXT,  r3 TEXT,  r4 TEXT,
+        r6 TEXT,  r8 TEXT,  r9 TEXT,  r10 TEXT,
+        r12_mascota TEXT,   r13_hijos TEXT,
+        perfil_ia          TEXT,
+        objetivo_2025      TEXT,
+        nivel_introversion INTEGER DEFAULT 0
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS conexion_alfa_matches (
+        id          SERIAL PRIMARY KEY,
+        correo_1    TEXT NOT NULL,
+        correo_2    TEXT NOT NULL,
+        nombre_1    TEXT NOT NULL,
+        nombre_2    TEXT NOT NULL,
+        perfil_1    TEXT,
+        perfil_2    TEXT,
+        razon_match TEXT,
+        evidencia   TEXT,
+        feedback    SMALLINT,
+        UNIQUE (correo_1, correo_2)
+    );
+    """,
+    # TODO: añade aquí el resto de tablas (retos, reto_foto, evidencias, etc.)
+]
+
+def create_tables_if_needed() -> None:
+    """Ejecuta cada sentencia CREATE TABLE IF NOT EXISTS una vez al arranque."""
+    conn = get_db_connection()
+    try:
+        for sql in SCHEMA_SQL:
+            conn.execute(sql)
+        conn.commit()
+        print("✅ Tablas verificadas/creadas")
+    finally:
+        conn.close()
+
+# Ejecutamos la función al importar la app
+create_tables_if_needed()
+
 
 # ─────────────────────── MODELO IA ───────────────────────
 from pathlib import Path
