@@ -13,7 +13,7 @@ from dotenv import load_dotenv
 
 # ───────────────────────── CONFIG ─────────────────────────
 import openai
-from openai.error import OpenAIError
+from openai import OpenAIError
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 if not OPENAI_API_KEY:
