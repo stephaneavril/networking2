@@ -334,11 +334,14 @@ def login():
         session.update({"jugador": jugador, "correo": correo})
         flash(f"¡Bienvenido, {jugador}!")
         conn = get_db_connection()
+
         ya = conn.execute(
         "SELECT 1 FROM conexion_alfa_respuestas WHERE correo = %s",
         (correo,)
-        ).fetchone()           
-        _pool.putconn(conn)
+        ).fetchone()
+        conn.close()          # devolvemos la conexión correctamente
+
+
         if not ya:
             return redirect(url_for("conocete_mejor"))
         return redirect(next_url)
