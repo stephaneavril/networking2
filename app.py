@@ -403,66 +403,47 @@ def generar_matches_conexion_alfa():
     flash(f"✅ {nuevos} matches generados con éxito (modelo OpenAI).")
     return redirect("/admin_panel")
 
-# -------------------- RETO ADIVINA --------------------
-@app.route("/adivina")
-@login_required
-def adivina():
-    conn = get_db_connection()
-
-    filas = conn.execute("""
-        SELECT nombre_completo, dato_curioso, pelicula_favorita,
-               deporte_favorito, prenda_imprescindible,
-               mejor_concierto, pasion
-        FROM   adivina_participantes
-    """).fetchall()
-
-    muestra = random.sample(filas, k=min(15, len(filas)))   # ← 15 exactos
-    participantes = [dict(r) for r in muestra]
-
-    # obtenemos de una vez el nombre del match (si existe)
-    match_name = obtener_match_para(session["correo"], conn)
-    conn.close()
-
-    return render_template(
-        "adivina.html",
-        participantes=participantes,
-        match_name=match_name       # ← se lo mandamos al front
-    )
-
+# -------------------- RETO ADIVINA – guardar resultados --------------------
 @app.route('/adivina_finalizado', methods=['POST'])
 def adivina_finalizado():
     if 'jugador' not in session:
         return jsonify({"error": "No autenticado"}), 401
 
-    data     = request.get_json()
-    jugador  = session['jugador']
-    puntaje  = data.get("puntaje", 0)
-    aciertos = data.get("aciertos", 0)
+    data      = request.get_json(force=True) or {}
+    jugador   = session['jugador']
+    puntaje   = int(data.get("puntaje", 0))
+    aciertos  = int(data.get("aciertos", 0))
 
-    # Validaciones básicas
-    if not isinstance(puntaje, int) or not isinstance(aciertos, int):
-        return jsonify({"error": "Datos inválidos"}), 400
+    conn = get_db_connection()
 
-    conn   = get_db_connection()
-    cursor = conn.cursor()
-
-    # Evitar doble registro
-    if cursor.execute("SELECT 1 FROM adivina_resultados WHERE nombre_jugador = ?",
-                      (jugador,)).fetchone():
+    # 1️⃣  Evitar doble registro
+    ya = conn.execute(
+        "SELECT 1 FROM adivina_resultados WHERE nombre_jugador = %s",
+        (jugador,)
+    ).fetchone()
+    if ya:
         conn.close()
         return jsonify({"error": "Ya has completado el reto"}), 400
 
-    cursor.execute("""
+    # 2️⃣  Insertar resultado
+    conn.execute(
+        """
         INSERT INTO adivina_resultados (nombre_jugador, aciertos, puntos_extra)
-        VALUES (?,?,?)
-    """, (jugador, aciertos, puntaje))
+        VALUES (%s, %s, %s)
+        """,
+        (jugador, aciertos, puntaje)
+    )
     conn.commit()
+
+    # 3️⃣  Buscar nombre de match *antes* de cerrar la conexión
+    match_name = obtener_match_para(session["correo"], conn)
     conn.close()
 
-    match_name = obtener_match_para(session["correo"], conn)
-
     return jsonify({
-        "message": f"🎉 ¡Reto completado! {jugador} acertó {aciertos} nombre(s) y obtuvo {puntaje} pts.",
+        "message": (
+            f"🎉 ¡Reto completado! {jugador} acertó {aciertos} nombre(s) "
+            f"y obtuvo {puntaje} pts."
+        ),
         "redirect": "/ranking_adivina"
     })
 
@@ -640,20 +621,21 @@ def respuestas_curiosas():
 # ── NUEVO helper (lo pones cerca de otras utilidades) ────────────
 def obtener_match_para(correo_jugador, conn):
     """
-    Devuelve el nombre de la persona con la que mejor matchea el jugador,
-    usando la tabla conexion_alfa_matches.  Si aún no tiene, regresa None.
+    Devuelve el nombre del match de la tabla conexion_alfa_matches.
     """
-    row = conn.execute("""
-        SELECT CASE 
-                 WHEN correo_1 = ?
-                 THEN nombre_2
+    row = conn.execute(
+        """
+        SELECT CASE
+                 WHEN correo_1 = %s THEN nombre_2
                  ELSE nombre_1
                END AS match_name
         FROM   conexion_alfa_matches
-        WHERE  correo_1 = ? OR correo_2 = ?
-        ORDER  BY id ASC            -- el primero que encuentre
+        WHERE  correo_1 = %s OR correo_2 = %s
+        ORDER  BY id ASC
         LIMIT 1
-    """, (correo_jugador, correo_jugador, correo_jugador)).fetchone()
+        """,
+        (correo_jugador, correo_jugador, correo_jugador)
+    ).fetchone()
     return row["match_name"] if row else None
 
 # -------------------- SUBIR EVIDENCIA INDIVIDUAL --------------------
@@ -835,6 +817,7 @@ def reto_foto():
     mensaje=datos_reto["mensaje"],
     reto_nombre=datos_reto["titulo_visible"] or datos_reto["nombre_reto"]
 )
+from psycopg2 import IntegrityError
 
 @app.route('/ver_fotos_reto_foto', methods=['GET', 'POST'])
 def ver_fotos_reto_foto():
@@ -883,7 +866,8 @@ def ver_fotos_reto_foto():
                         "INSERT INTO votos_reto_foto (correo_votante, id_foto, puntos) VALUES (?, ?, ?)",
                         (correo, id_foto, puntos)
                     )
-                except sqlite3.IntegrityError:
+                except psycopg2.IntegrityError:
+                    conn.rollback()      # opcional pero recomendable
                     continue
         conn.commit()
         flash("✅ ¡Tus votos han sido registrados!")
@@ -978,17 +962,23 @@ def votar_fotos():
     if 'correo' not in session:
         return redirect('/')
     correo_votante = session['correo']
-    votos = request.form
-    total_puntos = sum([int(v) for v in votos.values() if v.isdigit()])
+
+    total_puntos = sum(int(v) for v in request.form.values() if v.isdigit())
     if total_puntos != 3:
         return "❌ Debes asignar exactamente 3 puntos", 400
+
     conn = get_db_connection()
-    for id_foto, puntos in votos.items():
+    for id_foto, puntos in request.form.items():
         if puntos and puntos.isdigit():
-            conn.execute('''
-                INSERT OR REPLACE INTO votos_reto_foto (correo_votante, id_foto, puntos)
-                VALUES (?, ?, ?)
-            ''', (correo_votante, int(id_foto), int(puntos)))
+            conn.execute(
+                """
+                INSERT INTO votos_reto_foto (correo_votante, id_foto, puntos)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (correo_votante, id_foto)
+                DO UPDATE SET puntos = EXCLUDED.puntos
+                """,
+                (correo_votante, int(id_foto), int(puntos))
+            )
     conn.commit()
     conn.close()
     return redirect('/')
