@@ -426,13 +426,15 @@ def conocete_mejor():
                 data["r12_mascota"], data["r13_hijos"], perfil,
             ),
         )
-    conn.commit(); _pool.putconn(conn)
+    conn.commit()
+    conn.close()          # ← devuelve la conexión al pool
     flash("✅ Respuestas guardadas. ¡Gracias!")
     return redirect(url_for("index"))
 
 # --------------------- GENERAR MATCHES (ADMIN) ----------------------
 
 @app.route("/generar_matches_conexion_alfa", methods=["POST"])
+@login_required
 def generar_matches_conexion_alfa():
     if "jugador" not in session:
         return redirect("/")
@@ -470,6 +472,7 @@ def generar_matches_conexion_alfa():
 
 # -------------------- RETO ADIVINA – guardar resultados --------------------
 @app.route('/adivina_finalizado', methods=['POST'])
+@login_required
 def adivina_finalizado():
     if 'jugador' not in session:
         return jsonify({"error": "No autenticado"}), 401
@@ -601,6 +604,7 @@ def ranking_adivina():
         return redirect(url_for("index"))
 
 @app.route('/reset_adivina_quien', methods=['POST'])
+
 def reset_adivina_quien():
     conn = get_db_connection()
     conn.execute("DELETE FROM adivina_resultados")
@@ -1134,6 +1138,7 @@ def reset_reto_foto():
 # -------------------- CONEXION ALFA --------------------
 
 @app.route('/conexion_alfa')
+@login_required
 def conexion_alfa():
     if 'correo' not in session:
         return redirect('/')
