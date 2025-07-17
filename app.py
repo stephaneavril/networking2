@@ -353,9 +353,12 @@ def login():
 def index():
     if "jugador" not in session:
         return redirect("/login")
-    conn = get_db_connection()
-    retos = fetchone(conn, "SELECT json_agg(retos) AS r FROM (SELECT * FROM retos WHERE activo=1) retos")
-    _pool.putconn(conn)
+    retos = conn.execute(
+    "SELECT json_agg(retos) AS r "
+    "FROM (SELECT * FROM retos WHERE activo = 1) retos"
+    ).fetchone()
+    conn.close()      # devolvemos la conexión al pool
+
 
     # La DB de QR sigue en SQLite local
     qr_conn = sqlite3.connect("scan_points.db"); qr_conn.row_factory = sqlite3.Row
@@ -372,8 +375,11 @@ def index():
 def conocete_mejor():
     if request.method == "GET":
         conn = get_db_connection()
-        ya = fetchone(conn, "SELECT 1 FROM conexion_alfa_respuestas WHERE correo=%s", (session["correo"],))
-        _pool.putconn(conn)
+        ya = conn.execute(
+        "SELECT 1 FROM conexion_alfa_respuestas WHERE correo = %s",
+        (session["correo"],)
+        ).fetchone()
+        conn.close()
         return render_template("preguntas_post_login.html", ya_respondio=bool(ya))
 
     f = request.form.get
