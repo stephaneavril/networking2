@@ -79,6 +79,20 @@ class DB:
 
 def get_db_connection() -> DB:
     return DB(_pool.getconn())
+# ── Helpers de lectura rápida ───────────────────────────
+def fetchone(conn, sql: str, params: Sequence[Any] = ()):
+    """Devuelve UN registro o None, y deja el cursor cerrado."""
+    cur = conn.execute(sql, params)
+    row = cur.fetchone()
+    cur.close()
+    return row
+
+def fetchall(conn, sql: str, params: Sequence[Any] = ()):
+    cur = conn.execute(sql, params)
+    rows = cur.fetchall()
+    cur.close()
+    return rows
+
 
 # ─────────── Crear tablas automáticamente si no existen ────────────
 SCHEMA_SQL = [
@@ -348,38 +362,46 @@ def login():
     return render_template("login.html", next=next_url)
 
 # ───────────────────────── HOME ───────────────────────────
-
+# ───────────────────────── HOME ─────────────────────────
 @app.route("/")
 @login_required
+
 def index():
-    # 1️⃣ Abrir conexión Postgres
+    # 1. conexión Postgres
     conn = get_db_connection()
 
-    # 2️⃣ Retos activos
-    retos = conn.execute(
+    # 2. retos activos
+    row = fetchone(
+        conn,
         """
         SELECT json_agg(retos) AS r
-        FROM (SELECT * FROM retos WHERE activo = 1) retos
+        FROM (SELECT * FROM retos WHERE activo = 1) AS retos
         """
-    ).fetchone()
+    )
+    retos_activos = row["r"] if row and row["r"] else []
 
-    # 3️⃣ Ranking QR (sigue en SQLite local)
-    qr_conn = sqlite3.connect("scan_points.db"); qr_conn.row_factory = sqlite3.Row
-    ranking_qr = qr_conn.execute("""
+    # 3. ranking por códigos-QR (sigue en SQLite local)
+    qr_conn = sqlite3.connect("scan_points.db")
+    qr_conn.row_factory = sqlite3.Row
+    ranking_qr = qr_conn.execute(
+        """
         SELECT nombre, SUM(puntos) AS total
-        FROM registros GROUP BY nombre ORDER BY total DESC
-    """).fetchall()
+        FROM registros
+        GROUP BY nombre
+        ORDER BY total DESC
+        """
+    ).fetchall()
     qr_conn.close()
 
-    conn.close()   # 4️⃣ Devolver la conexión al pool
+    # 4. ¡recuerda devolver la conexión al pool!
+    conn.close()
 
     return render_template(
         "index.html",
-        retos=retos["r"] if retos else [],
+        retos=retos_activos,
         ranking_qr=ranking_qr,
-        modo_foto_equipo=False
+        modo_foto_equipo=False,
     )
-
 # --------------------------- CONÓCETE MEJOR ---------------------------
 
 @app.route("/conocete_mejor", methods=["GET", "POST"])
@@ -448,8 +470,7 @@ def conocete_mejor():
 @app.route("/generar_matches_conexion_alfa", methods=["POST"])
 @login_required
 def generar_matches_conexion_alfa():
-    if "jugador" not in session:
-        return redirect("/")
+    
     conn = get_db_connection()
     with conn.cursor() as cur:
         cur.execute("SELECT * FROM conexion_alfa_respuestas")
@@ -478,7 +499,7 @@ def generar_matches_conexion_alfa():
                     p["perfil_1"], p["perfil_2"], razon,
                 ),
             ); nuevos += 1
-    conn.commit(); _pool.putconn(conn)
+    conn.commit(); _conn.close()
     flash(f"✅ {nuevos} matches generados con éxito (modelo OpenAI).")
     return redirect("/admin_panel")
 
