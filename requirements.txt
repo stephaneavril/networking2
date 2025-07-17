@@ -3,7 +3,7 @@ Flask==3.0.3          # incluye Werkzeug, Click, Jinja2, MarkupSafe, Blinker
 gunicorn==22.0.0      # servidor de producción en Render
 
 # ─── IA y ciencia de datos ────────────────
-numpy==1.26.4
+numpy==2.0.0
 scipy==1.14.0         # requerido por scikit-learn
 scikit-learn==1.5.0   # trae joblib y threadpoolctl
 
