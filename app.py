@@ -385,7 +385,6 @@ def login():
         return redirect(next_url)
     return render_template("login.html", next=next_url)
 
-# ───────────────────────── HOME ───────────────────────────
 # ───────────────────────── HOME ─────────────────────────
 @app.route("/")
 @login_required
@@ -525,6 +524,28 @@ def generar_matches_conexion_alfa():
     conn.commit(); conn.close()
     flash(f"✅ {nuevos} matches generados con éxito (modelo OpenAI).")
     return redirect("/admin_panel")
+
+# ------------------- RETO ADIVINA – pantalla de juego -------------------
+@app.route("/adivina")
+@login_required
+def adivina():
+    """
+    Carga la plantilla con las cartas de los participantes.
+    Si aún no hay contenido en adivina_participantes
+    muestra un mensaje amigable al usuario.
+    """
+    conn = get_db_connection()
+    participantes = conn.execute(
+        "SELECT * FROM adivina_participantes ORDER BY RANDOM()"
+    ).fetchall()
+    conn.close()
+
+    if not participantes:
+        flash("⚠️ El reto aún no está listo. Vuelve más tarde.")
+        return redirect(url_for("index"))
+
+    # `adivina.html` es la misma plantilla que ya usabas en tu app local
+    return render_template("adivina.html", tarjetas=participantes)
 
 # -------------------- RETO ADIVINA – guardar resultados --------------------
 @app.route('/adivina_finalizado', methods=['POST'])
