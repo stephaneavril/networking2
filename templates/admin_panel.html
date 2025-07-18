@@ -117,7 +117,17 @@
 <form method="POST" action="/eliminar_todos_los_jugadores" onsubmit="return confirm('¿Eliminar jugadores y toda la data?');">
   <button type="submit" style="background: darkred;">🧨 Eliminar TODOS los jugadores</button>
 </form>
-
+<h3>👥 Participantes registrados</h3>
+<table>
+  <tr><th>Nombre</th><th>Correo</th><th>Pasión</th></tr>
+  {% for p in participantes %}
+    <tr>
+      <td>{{ p.nombre }}</td>
+      <td>{{ p.correo }}</td>
+      <td>{{ p.r2 }}</td>
+    </tr>
+  {% endfor %}
+</table>
 <!-- Fotos por equipo -->
 <h2>📷 Ver fotos por equipo</h2>
 <a href="/ver_fotos_equipo" target="_blank" style="color:lightblue;">Ver todas las fotos subidas por equipos</a>

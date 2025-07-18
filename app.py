@@ -27,6 +27,19 @@ app.config.update(
     UPLOAD_FOLDER_GRUPAL="evidencias_reto_grupal",
     EMBED_MODEL="text-embedding-3-small",
 )
+@app.route("/login_admin")
+def login_admin():
+    token = request.args.get("token")
+    if token != ADMIN_TOKEN:
+        return "⛔ Token inválido", 403
+
+    session.update({
+        "is_admin": True,
+        "jugador":  "ADMIN",
+        "correo":   "admin@example.com",
+    })
+    flash("✅ Sesión de administrador iniciada")
+    return redirect(url_for("admin_panel"))
 
 # ───────── Admin quick‑access ─────────
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "SupermanNoEsGay")
@@ -224,7 +237,15 @@ def create_tables_if_needed() -> None:
         # 1. Crear / actualizar todas las tablas
         for sql in SCHEMA_SQL:
             conn.execute(sql)
-
+        # ── quitar o volver NULL-able columnas antiguas ──
+        for col in ("correo", "nombre"):
+            try:
+                conn.execute(
+                    f"ALTER TABLE adivina_participantes "
+                    f"ALTER COLUMN {col} DROP NOT NULL"
+                )
+            except psycopg2.errors.UndefinedColumn:
+                pass 
         # 2. Sembrar los retos base (solo si no existen)
         seed = [
             ("Adivina Quién",  "individual", "Juego de preguntas"),
@@ -527,41 +548,53 @@ def conocete_mejor():
 
 # --------------------- GENERAR MATCHES (ADMIN) ----------------------
 
-@app.route("/generar_matches_conexion_alfa", methods=["POST"])
-@login_required
+@app.route("/generar_matches_conexion_alfa", methods=["GET", "POST"])
 def generar_matches_conexion_alfa():
-    
+    # sólo admins
+    if not admin_ok(request):
+        flash("⚠️ Sólo el administrador puede generar matches")
+        return redirect("/admin_panel")
+
     conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute("SELECT * FROM conexion_alfa_respuestas")
-        datos = cur.fetchall()
+    datos = conn.execute("SELECT * FROM conexion_alfa_respuestas").fetchall()
     if len(datos) < 2:
-        flash("❌ Mínimo 2 participantes para generar matches."); _pool.putconn(conn); return redirect("/admin_panel")
+        conn.close()
+        flash("❌ Necesitas al menos 2 participantes")
+        return redirect("/admin_panel")
+
     pares = hacer_matches(datos)
 
-    with conn.cursor() as cur:
-        cur.execute("SELECT correo_1, correo_2 FROM conexion_alfa_matches")
-        ya = {tuple(sorted((r["correo_1"], r["correo_2"]))) for r in cur.fetchall()}
+    cur = conn.cursor()
+    cur.execute("SELECT correo_1, correo_2 FROM conexion_alfa_matches")
+    ya = {tuple(sorted((r["correo_1"], r["correo_2"]))) for r in cur.fetchall()}
 
-        nuevos = 0
-        for p in pares:
-            key = tuple(sorted((p["correo_1"], p["correo_2"])));
-            if key in ya: continue
-            razon = explicar_match_gpt(p["perfil_1"], p["perfil_2"], p["score"]) or f"🤖 Match IA · similitud {p['score']*100:.0f}%"
-            cur.execute(
-                """
-                INSERT INTO conexion_alfa_matches
-                      (correo_1, correo_2, nombre_1, nombre_2, perfil_1, perfil_2, razon_match)
-                VALUES (%s,%s,%s,%s,%s,%s,%s)
-                """,
-                (
-                    p["correo_1"], p["correo_2"], p["nombre_1"], p["nombre_2"],
-                    p["perfil_1"], p["perfil_2"], razon,
-                ),
-            ); nuevos += 1
-    conn.commit(); conn.close()
-    flash(f"✅ {nuevos} matches generados con éxito (modelo OpenAI).")
+    nuevos = 0
+    for p in pares:
+        key = tuple(sorted((p["correo_1"], p["correo_2"])))
+        if key in ya:
+            continue
+        razon = (
+            explicar_match_gpt(p["perfil_1"], p["perfil_2"], p["score"])
+            or f"🤖 Match IA · similitud {p['score']*100:.0f}%"
+        )
+        cur.execute(
+            """
+            INSERT INTO conexion_alfa_matches
+                  (correo_1, correo_2, nombre_1, nombre_2,
+                   perfil_1, perfil_2, razon_match)
+            VALUES (%s,%s,%s,%s,%s,%s,%s)
+            """,
+            (p["correo_1"], p["correo_2"],
+             p["nombre_1"], p["nombre_2"],
+             p["perfil_1"], p["perfil_2"], razon)
+        )
+        nuevos += 1
+
+    conn.commit()
+    conn.close()
+    flash(f"✅ {nuevos} matches creados")
     return redirect("/admin_panel")
+
 
 # ------------------- RETO ADIVINA – pantalla de juego -------------------
 @app.route("/adivina")
@@ -910,13 +943,18 @@ def admin_panel():
     equipos = {}
     for f in filas:
         equipos.setdefault(f["equipo"], {})[f["reto_no"]] = f["archivo"]
+    
+    participantes = conn.execute(
+    "SELECT * FROM conexion_alfa_respuestas ORDER BY nombre"
+    ).fetchall()
 
     conn.close()
     return render_template("admin_panel.html",
                            retos=retos,
                            resultados=resultados,
                            matches_conexion=matches,
-                           equipos=equipos)
+                           equipos=equipos,
+                           participantes=participantes,)
 
 # -------------------- RETOS FOTO Y MI6 --------------------
 
