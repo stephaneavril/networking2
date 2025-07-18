@@ -818,17 +818,21 @@ def admin_panel():
 
     # ── 1. Procesar botones ──────────────────────────────
     if request.method == 'POST':
-        if 'reto_id' in request.form and 'activo' in request.form:        # ON / OFF
-            conn.execute("UPDATE retos SET activo=? WHERE id=?",
-                         (int(request.form['activo']), int(request.form['reto_id'])))
-            conn.commit()
-            flash("✅ Estado de reto actualizado.")
-        elif 'activar_solo' in request.form:                              # 🔁 Solo este
-            objetivo = int(request.form['activar_solo'])
-            conn.execute("UPDATE retos SET activo=0")
-            conn.execute("UPDATE retos SET activo=1 WHERE id=?", (objetivo,))
-            conn.commit()
-            flash("✅ Solo ese reto quedó activo.")
+        if 'reto_id' in request.form and 'activo' in request.form:
+            activo_bool = request.form['activo'] in ('1', 'true', 't', 'on')
+            conn.execute(
+                "UPDATE retos SET activo=%s WHERE id=%s",
+                (activo_bool, int(request.form['reto_id']))
+        )
+        conn.commit()
+        flash("✅ Estado de reto actualizado.")
+    elif 'activar_solo' in request.form:
+        objetivo = int(request.form['activar_solo'])
+        conn.execute("UPDATE retos SET activo=FALSE")                  # todos off
+        conn.execute("UPDATE retos SET activo=TRUE  WHERE id=%s", (objetivo,))
+        conn.commit()
+        flash("✅ Solo ese reto quedó activo.")
+
 
     # ── 2. Datos para la plantilla ───────────────────────
     retos      = conn.execute("SELECT * FROM retos").fetchall()
