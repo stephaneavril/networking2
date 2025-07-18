@@ -240,6 +240,20 @@ def create_tables_if_needed() -> None:
                 """,
                 (nombre, tipo, desc),
             )
+        # ── Parches de columnas heredadas ───────────────────────────────
+        try:
+    # 1. en versiones antiguas existía nombre NOT NULL
+            conn.execute("ALTER TABLE adivina_participantes "
+                 "ALTER COLUMN nombre DROP NOT NULL")
+        except psycopg2.errors.UndefinedColumn:
+            pass  # la columna ya no existe o ya está parcheada
+
+# 2. si la tabla jugadores no existe evita fallos en /eliminar_todos_los_jugadores
+        try:
+            conn.execute("CREATE TABLE IF NOT EXISTS jugadores(dummy INTEGER);")
+            conn.execute("TRUNCATE TABLE jugadores;")  # la deja vacía si llegaran a usarla
+        except Exception as e:
+            print("⚠️ parche jugadores:", e)
 
         conn.commit()
         print("✅ Tablas verificadas/creadas y retos iniciales insertados")
@@ -248,7 +262,7 @@ def create_tables_if_needed() -> None:
 
 # Llamamos a la función al importar la aplicación
 create_tables_if_needed()
-    
+
 
 # ─────────────────────── MODELO IA ───────────────────────
 from pathlib import Path
