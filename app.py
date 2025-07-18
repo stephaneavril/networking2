@@ -96,15 +96,36 @@ def fetchall(conn, sql: str, params: Sequence[Any] = ()):
 
 # ─────────── Crear tablas automáticamente si no existen ────────────
 SCHEMA_SQL = [
+
+    # 1️⃣  PARTICIPANTES DEL JUEGO “ADIVINA QUIÉN”
     """
     CREATE TABLE IF NOT EXISTS adivina_participantes (
-        id                 SERIAL PRIMARY KEY,
-        nombre             TEXT  NOT NULL,
-        correo             TEXT  NOT NULL UNIQUE,
-        objetivo_2025      TEXT,
-        nivel_introversion INTEGER
+        id                    SERIAL PRIMARY KEY,
+        nombre_completo       TEXT,
+        pasion                TEXT,
+        dato_curioso          TEXT,
+        pelicula_favorita     TEXT,
+        deporte_favorito      TEXT,
+        prenda_imprescindible TEXT,
+        mejor_concierto       TEXT,
+        mejor_libro           TEXT,
+        objetivo_2025         TEXT,
+        nivel_introversion    INTEGER DEFAULT 0
     );
+    ALTER TABLE adivina_participantes
+      ADD COLUMN IF NOT EXISTS nombre_completo       TEXT,
+      ADD COLUMN IF NOT EXISTS pasion                TEXT,
+      ADD COLUMN IF NOT EXISTS dato_curioso          TEXT,
+      ADD COLUMN IF NOT EXISTS pelicula_favorita     TEXT,
+      ADD COLUMN IF NOT EXISTS deporte_favorito      TEXT,
+      ADD COLUMN IF NOT EXISTS prenda_imprescindible TEXT,
+      ADD COLUMN IF NOT EXISTS mejor_concierto       TEXT,
+      ADD COLUMN IF NOT EXISTS mejor_libro           TEXT,
+      ADD COLUMN IF NOT EXISTS objetivo_2025         TEXT,
+      ADD COLUMN IF NOT EXISTS nivel_introversion    INTEGER DEFAULT 0;
     """,
+
+    # 2️⃣  RESULTADOS DEL JUEGO
     """
     CREATE TABLE IF NOT EXISTS adivina_resultados (
         id              SERIAL PRIMARY KEY,
@@ -114,6 +135,8 @@ SCHEMA_SQL = [
         timestamp       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """,
+
+    # 3️⃣  RESPUESTAS DEL FORMULARIO CONEXIÓN ALFA
     """
     CREATE TABLE IF NOT EXISTS conexion_alfa_respuestas (
         correo              TEXT PRIMARY KEY,
@@ -126,6 +149,8 @@ SCHEMA_SQL = [
         nivel_introversion INTEGER DEFAULT 0
     );
     """,
+
+    # 4️⃣  MATCHES IA
     """
     CREATE TABLE IF NOT EXISTS conexion_alfa_matches (
         id          SERIAL PRIMARY KEY,
@@ -141,15 +166,19 @@ SCHEMA_SQL = [
         UNIQUE (correo_1, correo_2)
     );
     """,
+
+    # 5️⃣  RETOS
     """
     CREATE TABLE IF NOT EXISTS retos (
-    id          SERIAL PRIMARY KEY,
-    nombre      TEXT  UNIQUE NOT NULL,
-    tipo        TEXT  DEFAULT 'individual',   -- individual / grupal
-    descripcion TEXT,
-    activo      BOOLEAN DEFAULT FALSE
+        id          SERIAL PRIMARY KEY,
+        nombre      TEXT  UNIQUE NOT NULL,
+        tipo        TEXT  DEFAULT 'individual',   -- individual / grupal
+        descripcion TEXT,
+        activo      BOOLEAN DEFAULT FALSE
     );
     """,
+
+    # 6️⃣  TABLAS DE FOTOS Y VOTOS (se dejan tal cual)
     """
     CREATE TABLE IF NOT EXISTS reto_foto (
         id       SERIAL PRIMARY KEY,
@@ -189,19 +218,14 @@ SCHEMA_SQL = [
 ]
 
 def create_tables_if_needed() -> None:
-    """Ejecuta cada sentencia CREATE TABLE IF NOT EXISTS una vez al arranque."""
+    """Crea tablas y columnas faltantes al arrancar la app y siembra los retos base."""
     conn = get_db_connection()
     try:
-        # 1. Crear tablas
+        # 1. Crear / actualizar todas las tablas
         for sql in SCHEMA_SQL:
             conn.execute(sql)
 
-        ## 2️⃣ Parchar tablas antiguas ------------------------------------------
-        conn.execute(
-            "ALTER TABLE retos ADD COLUMN IF NOT EXISTS descripcion TEXT"
-        )
-
-        # 3️⃣ Sembrar retos iniciales ------------------------------------------
+        # 2. Sembrar los retos base (solo si no existen)
         seed = [
             ("Adivina Quién",  "individual", "Juego de preguntas"),
             ("Sube tu foto",   "individual", "Reto fotográfico"),
@@ -222,9 +246,9 @@ def create_tables_if_needed() -> None:
     finally:
         conn.close()
 
-# Ejecutamos la función al importar la app
+# Llamamos a la función al importar la aplicación
 create_tables_if_needed()
-
+    
 
 # ─────────────────────── MODELO IA ───────────────────────
 from pathlib import Path
