@@ -143,10 +143,11 @@ SCHEMA_SQL = [
     """,
     """
     CREATE TABLE IF NOT EXISTS retos (
-        id     SERIAL PRIMARY KEY,
-        nombre TEXT  NOT NULL UNIQUE,
-        tipo   TEXT  DEFAULT 'individual',   -- individual  / grupal
-        activo BOOLEAN DEFAULT FALSE
+    id          SERIAL PRIMARY KEY,
+    nombre      TEXT  UNIQUE NOT NULL,
+    tipo        TEXT  DEFAULT 'individual',   -- individual / grupal
+    descripcion TEXT,
+    activo      BOOLEAN DEFAULT FALSE
     );
     """,
     """
@@ -191,10 +192,29 @@ def create_tables_if_needed() -> None:
     """Ejecuta cada sentencia CREATE TABLE IF NOT EXISTS una vez al arranque."""
     conn = get_db_connection()
     try:
+        # 1. Crear tablas
         for sql in SCHEMA_SQL:
             conn.execute(sql)
+
+        # 2. Sembrar retos si aún no existen
+        seed = [
+            ("Adivina Quién",  "individual", "Juego de preguntas"),
+            ("Sube tu foto",   "individual", "Reto fotográfico"),
+            ("Conexión Alfa",  "individual", "Emparejamiento IA"),
+        ]
+        for nombre, tipo, desc in seed:
+            conn.execute(
+                """
+                INSERT INTO retos (nombre, tipo, descripcion)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (nombre) DO NOTHING
+                """,
+                (nombre, tipo, desc),
+            )
+
+        # 3. Confirmar
         conn.commit()
-        print("✅ Tablas verificadas/creadas")
+        print("✅ Tablas verificadas/creadas y retos iniciales insertados")
     finally:
         conn.close()
 
@@ -918,6 +938,7 @@ def reto_foto():
     mensaje=datos_reto["mensaje"],
     reto_nombre=datos_reto["titulo_visible"] or datos_reto["nombre_reto"]
 )
+
 from psycopg2 import IntegrityError
 
 @app.route('/ver_fotos_reto_foto', methods=['GET', 'POST'])
