@@ -196,7 +196,12 @@ def create_tables_if_needed() -> None:
         for sql in SCHEMA_SQL:
             conn.execute(sql)
 
-        # 2. Sembrar retos si aún no existen
+        ## 2️⃣ Parchar tablas antiguas ------------------------------------------
+        conn.execute(
+            "ALTER TABLE retos ADD COLUMN IF NOT EXISTS descripcion TEXT"
+        )
+
+        # 3️⃣ Sembrar retos iniciales ------------------------------------------
         seed = [
             ("Adivina Quién",  "individual", "Juego de preguntas"),
             ("Sube tu foto",   "individual", "Reto fotográfico"),
@@ -212,7 +217,6 @@ def create_tables_if_needed() -> None:
                 (nombre, tipo, desc),
             )
 
-        # 3. Confirmar
         conn.commit()
         print("✅ Tablas verificadas/creadas y retos iniciales insertados")
     finally:
