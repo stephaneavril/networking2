@@ -189,14 +189,40 @@ def login_required(f):
 def admin_required(f):
     @wraps(f)
     def _wrap(*args, **kwargs):
+        # ¿ya es admin en sesión?
         if session.get("is_admin"):
             return f(*args, **kwargs)
+
+        # ¿pasó token en la URL o en POST?
         tok = request.args.get("token") or request.form.get("token")
         if tok and tok == ADMIN_TOKEN:
             session["is_admin"] = True
             return f(*args, **kwargs)
-        return "No autorizado", 403
+
+        # si no, mándalo al formulario de admin
+        return redirect(url_for("admin_login"))
     return _wrap
+
+@app.route("/admin", methods=["GET", "POST"])
+def admin_login():
+    if request.method == "POST":
+        tok = (request.form.get("token") or "").strip()
+        if tok == ADMIN_TOKEN:
+            session["is_admin"] = True
+            flash("Sesión de administrador iniciada.")
+            return redirect(url_for("admin_panel"))
+        flash("Token incorrecto.")
+    # pequeño form inline para no depender de plantillas
+    return render_template_string("""
+    <html><body style="font-family:Segoe UI;background:#111;color:#eee;padding:30px">
+      <h2>🔐 Acceso Administrador</h2>
+      <form method="post">
+        <input name="token" placeholder="Token de administrador" style="padding:10px;width:300px">
+        <button style="padding:10px 16px">Entrar</button>
+      </form>
+      <p style="margin-top:10px"><a href="{{ url_for('index_page') }}">Volver al inicio</a></p>
+    </body></html>
+    """)
 
 # ─────────────────────────────────────────────────────────────
 # Utilidades
@@ -271,8 +297,10 @@ def login():
     session["correo"] = jugador["correo"]
     session["jugador"] = jugador["nombre"]  # para index.html
 
+    # ya no bloqueamos la entrada al index si falta el perfil
     if not get_respuestas(jugador["id"]):
-        return redirect(url_for("preguntas_post_login"))
+        flash("Completa tu perfil cuando puedas para mejorar los retos.")
+
     return redirect(url_for("index_page"))
 
 @app.route("/logout")
