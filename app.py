@@ -1,1770 +1,703 @@
-import os, random, sqlite3, math, json
+# app.py — TEAMS Networking (Adivina Quién, Reto Foto, Conexión Alfa)
+# -------------------------------------------------------------------
+# Requisitos de entorno:
+#   DATABASE_URL=<postgres URI>
+#   FLASK_SECRET=<cualquier cadena segura>
+#   ADMIN_TOKEN=<clave para entrar a /admin_panel>
+#
+# Requisitos de carpeta (con permisos de escritura):
+#   static/fotos_reto_foto/
+#
+# Cómo correr:
+#   pip install -r requirements.txt
+#   python app.py
+#   # o en prod: gunicorn app:app
+
+import os
+import re
+import json
 from datetime import datetime
 from functools import wraps
-from typing import List, Dict, Sequence, Mapping, Any
+from typing import Tuple
 
 from flask import (
-    Flask, render_template, request, jsonify, session,
-    redirect, flash, url_for
+    Flask, render_template, render_template_string, request, jsonify, session,
+    redirect, url_for, flash, send_from_directory
 )
-
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 
-# ───────────────────────── CONFIG ─────────────────────────
-import openai
-from openai import OpenAIError
-load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    raise RuntimeError("⚠️ Falta OPENAI_API_KEY en variables de entorno")
-# Inicializamos el API key en el SDK:
-openai.api_key = OPENAI_API_KEY
-app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET", "clave‑segura")
-app.config.update(
-    UPLOAD_FOLDER="evidencias",
-    UPLOAD_FOLDER_GRUPAL="evidencias_reto_grupal",
-    EMBED_MODEL="text-embedding-3-small",
-)
-@app.route("/login_admin")
-def login_admin():
-    token = request.args.get("token")
-    if token != ADMIN_TOKEN:
-        return "⛔ Token inválido", 403
+# ─────────────────────────────────────────────────────────────
+# Carga ENV y Flask
+# ─────────────────────────────────────────────────────────────
+load_dotenv(override=True)
 
-    session.update({
-        "is_admin": True,
-        "jugador":  "ADMIN",
-        "correo":   "admin@example.com",
-    })
-    flash("✅ Sesión de administrador iniciada")
-    return redirect(url_for("admin_panel"))
+app = Flask(__name__, template_folder='.', static_folder='static')
+app.secret_key = os.getenv("FLASK_SECRET", "change_me")
 
-# ───────── Admin quick‑access ─────────
-ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "SupermanNoEsGay")
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "letmein")
+FOTOS_DIR = os.path.join("static", "fotos_reto_foto")
+os.makedirs(FOTOS_DIR, exist_ok=True)
 
-def admin_ok(req):
-    if session.get("is_admin"):
-        return True
-    token = req.args.get("token") or req.headers.get("X-Admin-Token")
-    if token and token == ADMIN_TOKEN:
-        session["is_admin"] = True
-        return True
-    return False
-
-# ───────────────────────── DB (PostgreSQL) ─────────────────────────
-import psycopg2, psycopg2.extras
+# ─────────────────────────────────────────────────────────────
+# DB: PostgreSQL con pool
+# ─────────────────────────────────────────────────────────────
+import psycopg2
+import psycopg2.extras
 from psycopg2.pool import SimpleConnectionPool
-from typing import Sequence, Any
 
-DATABASE_URL = os.getenv("DATABASE_URL")  # ej. export DATABASE_URL="postgresql://…"
+DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
-    raise RuntimeError("⚠️ Falta la variable DATABASE_URL")
+    raise RuntimeError("Falta DATABASE_URL")
 
-_pool = SimpleConnectionPool(
-    1, 10,
-    dsn=DATABASE_URL,
-    sslmode="require",
-    cursor_factory=psycopg2.extras.RealDictCursor,
+pool = SimpleConnectionPool(
+    minconn=1, maxconn=12, dsn=DATABASE_URL,
+    cursor_factory=psycopg2.extras.RealDictCursor
 )
 
-def _qmark_to_psycopg(sql: str) -> str:
-    """Convierte placeholders «? » estilo-SQLite → «%s» para psycopg2."""
-    # Ojo: no rompe los %s que ya estén escritos
-    partes = sql.split("?")
-    return "%s".join(partes) if len(partes) > 1 else sql
+def db_conn():
+    conn = pool.getconn()
+    conn.autocommit = True
+    return conn
 
-class DB:
-    """Wrapper 100 % compatible con tu viejo `sqlite3.Connection`."""
-    def __init__(self, conn):
-        self._c = conn
+def db_return(conn):
+    if conn:
+        pool.putconn(conn)
 
-    def execute(self, sql: str, params: Sequence[Any] = ()):
-        sql = _qmark_to_psycopg(sql)
-        cur = self._c.cursor()                        # RealDictCursor por default
-        cur.execute(sql, params)
-        return cur           # mantiene `.fetchone()` / `.fetchall()` vivos
-
-    def commit(self):  self._c.commit()
-    def cursor(self):  return self._c.cursor()       # para los bloques “with conn.cursor()”
-    def close(self):   _pool.putconn(self._c)
-
-def get_db_connection() -> DB:
-    return DB(_pool.getconn())
-# ── Helpers de lectura rápida ───────────────────────────
-def fetchone(conn, sql: str, params: Sequence[Any] = ()):
-    """Devuelve UN registro o None, y deja el cursor cerrado."""
-    cur = conn.execute(sql, params)
-    row = cur.fetchone()
-    cur.close()
-    return row
-
-def fetchall(conn, sql: str, params: Sequence[Any] = ()):
-    cur = conn.execute(sql, params)
-    rows = cur.fetchall()
-    cur.close()
-    return rows
-
-
-# ─────────── Crear tablas automáticamente si no existen ────────────
-SCHEMA_SQL = [
-
-    # 1️⃣  PARTICIPANTES DEL JUEGO “ADIVINA QUIÉN”
-    """
-    CREATE TABLE IF NOT EXISTS adivina_participantes (
-        id                    SERIAL PRIMARY KEY,
-        nombre_completo       TEXT,
-        pasion                TEXT,
-        dato_curioso          TEXT,
-        pelicula_favorita     TEXT,
-        deporte_favorito      TEXT,
-        prenda_imprescindible TEXT,
-        mejor_concierto       TEXT,
-        mejor_libro           TEXT,
-        objetivo_2025         TEXT,
-        nivel_introversion    INTEGER DEFAULT 0
-    );
-    ALTER TABLE adivina_participantes
-      ADD COLUMN IF NOT EXISTS nombre_completo       TEXT,
-      ADD COLUMN IF NOT EXISTS pasion                TEXT,
-      ADD COLUMN IF NOT EXISTS dato_curioso          TEXT,
-      ADD COLUMN IF NOT EXISTS pelicula_favorita     TEXT,
-      ADD COLUMN IF NOT EXISTS deporte_favorito      TEXT,
-      ADD COLUMN IF NOT EXISTS prenda_imprescindible TEXT,
-      ADD COLUMN IF NOT EXISTS mejor_concierto       TEXT,
-      ADD COLUMN IF NOT EXISTS mejor_libro           TEXT,
-      ADD COLUMN IF NOT EXISTS objetivo_2025         TEXT,
-      ADD COLUMN IF NOT EXISTS nivel_introversion    INTEGER DEFAULT 0;
-    """,
-
-    # 2️⃣  RESULTADOS DEL JUEGO
-    """
-    CREATE TABLE IF NOT EXISTS adivina_resultados (
-        id              SERIAL PRIMARY KEY,
-        nombre_jugador  TEXT     NOT NULL,
-        aciertos        INTEGER  NOT NULL,
-        puntos_extra    INTEGER  NOT NULL,
-        timestamp       TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    """,
-
-    # 3️⃣  RESPUESTAS DEL FORMULARIO CONEXIÓN ALFA
-    """
-    CREATE TABLE IF NOT EXISTS conexion_alfa_respuestas (
-        correo              TEXT PRIMARY KEY,
-        nombre              TEXT NOT NULL,
-        r2 TEXT,  r3 TEXT,  r4 TEXT,
-        r6 TEXT,  r8 TEXT,  r9 TEXT,  r10 TEXT,
-        r12_mascota TEXT,   r13_hijos TEXT,
-        perfil_ia          TEXT,
-        objetivo_2025      TEXT,
-        nivel_introversion INTEGER DEFAULT 0
-    );
-    """,
-
-    # 4️⃣  MATCHES IA
-    """
-    CREATE TABLE IF NOT EXISTS conexion_alfa_matches (
-        id          SERIAL PRIMARY KEY,
-        correo_1    TEXT NOT NULL,
-        correo_2    TEXT NOT NULL,
-        nombre_1    TEXT NOT NULL,
-        nombre_2    TEXT NOT NULL,
-        perfil_1    TEXT,
-        perfil_2    TEXT,
-        razon_match TEXT,
-        evidencia   TEXT,
-        feedback    SMALLINT,
-        UNIQUE (correo_1, correo_2)
-    );
-    """,
-
-    # 5️⃣  RETOS
-    """
-    CREATE TABLE IF NOT EXISTS retos (
-        id          SERIAL PRIMARY KEY,
-        nombre      TEXT  UNIQUE NOT NULL,
-        tipo        TEXT  DEFAULT 'individual',   -- individual / grupal
-        descripcion TEXT,
-        activo      BOOLEAN DEFAULT FALSE
-    );
-    """,
-
-    # 6️⃣  TABLAS DE FOTOS Y VOTOS (se dejan tal cual)
-    """
-    CREATE TABLE IF NOT EXISTS reto_foto (
-        id       SERIAL PRIMARY KEY,
-        correo   TEXT NOT NULL,
-        nombre   TEXT NOT NULL,
-        archivo  TEXT NOT NULL,
-        reto_id  INTEGER REFERENCES retos(id)
-    );
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS votos_reto_foto (
-        correo_votante TEXT    NOT NULL,
-        id_foto        INTEGER NOT NULL REFERENCES reto_foto(id),
-        puntos         SMALLINT,
-        PRIMARY KEY (correo_votante, id_foto)
-    );
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS reto_equipo_foto (
-        id                 SERIAL PRIMARY KEY,
-        nombre_participante TEXT,
-        correo             TEXT,
-        equipo             TEXT,
-        archivo            TEXT,
-        reto_no            INTEGER
-    );
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS evidencias (
-        id                 SERIAL PRIMARY KEY,
-        reto_id            INTEGER,
-        nombre_participante TEXT,
-        archivo            TEXT,
-        timestamp          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    """
-]
-
-def create_tables_if_needed() -> None:
-    """Crea tablas y columnas faltantes al arrancar la app y siembra los retos base."""
-    conn = get_db_connection()
+def query(sql: str, params: Tuple = ()):
+    conn = db_conn()
     try:
-        # 1. Crear / actualizar todas las tablas
-        for sql in SCHEMA_SQL:
-            conn.execute(sql)
-        # ── quitar o volver NULL-able columnas antiguas ──
-        for col in ("correo", "nombre"):
-            try:
-                conn.execute(
-                    f"ALTER TABLE adivina_participantes "
-                    f"ALTER COLUMN {col} DROP NOT NULL"
-                )
-            except psycopg2.errors.UndefinedColumn:
-                pass 
-        # 2. Sembrar los retos base (solo si no existen)
-        seed = [
-            ("Adivina Quién",  "individual", "Juego de preguntas"),
-            ("Sube tu foto",   "individual", "Reto fotográfico"),
-            ("Conexión Alfa",  "individual", "Emparejamiento IA"),
-        ]
-        for nombre, tipo, desc in seed:
-            conn.execute(
-                """
-                INSERT INTO retos (nombre, tipo, descripcion)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (nombre) DO NOTHING
-                """,
-                (nombre, tipo, desc),
-            )
-        # ── Parches de columnas heredadas ───────────────────────────────
-        try:
-    # 1. en versiones antiguas existía nombre NOT NULL
-            conn.execute("ALTER TABLE adivina_participantes "
-                 "ALTER COLUMN nombre DROP NOT NULL")
-        except psycopg2.errors.UndefinedColumn:
-            pass  # la columna ya no existe o ya está parcheada
-
-# 2. si la tabla jugadores no existe evita fallos en /eliminar_todos_los_jugadores
-        try:
-            conn.execute("CREATE TABLE IF NOT EXISTS jugadores(dummy INTEGER);")
-            conn.execute("TRUNCATE TABLE jugadores;")  # la deja vacía si llegaran a usarla
-        except Exception as e:
-            print("⚠️ parche jugadores:", e)
-
-        conn.commit()
-        print("✅ Tablas verificadas/creadas y retos iniciales insertados")
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            if cur.description:
+                return cur.fetchall()
+            return []
     finally:
-        conn.close()
+        db_return(conn)
 
-# Llamamos a la función al importar la aplicación
-create_tables_if_needed()
-
-
-# ─────────────────────── MODELO IA ───────────────────────
-from pathlib import Path
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-import joblib, numpy as np
-MODEL_PATH = Path(__file__).with_name("vectorizer_ia.pkl")
-vectorizer_ia = joblib.load(MODEL_PATH) if MODEL_PATH.exists() else TfidfVectorizer().fit(["placeholder"])
-
-# ─────────────────────── UTILIDADES ──────────────────────
-
-def generar_perfil_ia(nombre: str, *, dato_curioso="", pelicula="", deporte="", prenda="",
-                       concierto="", pasion="", libro="", mascota="", hijos="") -> str:
-    partes: List[str] = []
-    add = lambda emoji, txt: partes.append(f"{emoji} {txt}") if txt else None
-    add("🧠", f"{nombre} comparte un dato curioso: “{dato_curioso}”.")
-    add("🎬", f"Su película favorita es “{pelicula}”.")
-    add("🏀", f"Deporte favorito: “{deporte}”.")
-    add("👕", f"No vive sin: “{prenda}”.")
-    add("🎤", f"Mejor concierto: “{concierto}”.")
-    add("🎶", f"Le apasiona: “{pasion}”.")
-    add("📚", f"Libro/arte favorito: “{libro}”.")
-    add("🐾", f"Mascota(s): {mascota}.")
-    add("👨‍👩‍👧‍👦", f"Hijos: {hijos}.")
-    partes.append("✨ ¿Por qué conocerle? Su mezcla de gustos garantiza charlas memorables.")
-    return " ".join(partes)
-
-# ---------- Embeddings (batch) ------------------------------------------------------
-
-def embed_texts(texts: List[str]) -> List[List[float]]:
-    """
-    Devuelve una lista de vectores de embedding para cada texto.
-    Corta cada texto a 4096 chars para cumplir límites de OpenAI.
-    """
+def execute(sql: str, params: Tuple = ()):
+    conn = db_conn()
     try:
-        resp = openai.embeddings.create(
-             model=app.config["EMBED_MODEL"],
-             input=[t[:4096] for t in texts]
-         )
-        # Cada elemento de resp["data"] es un dict con clave "embedding"
-        return [item["embedding"] for item in resp["data"]]
-    except OpenAIError as e:
-        # Si falla la llamada a OpenAI, imprimimos el error y devolvemos vectores ceros
-        print("❌ openai error:", e)
-        # Suponemos dimensión de 1536 (igual que `text-embedding-3-small`)
-        dim = 1536
-        return [[0.0] * dim for _ in texts]
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+    finally:
+        db_return(conn)
 
-# ---------- Emparejamiento Greedy ------------------------------------------
+# ─────────────────────────────────────────────────────────────
+# Esquema mínimo (se crea/ajusta al iniciar)
+# ─────────────────────────────────────────────────────────────
+DDL = """
+CREATE TABLE IF NOT EXISTS jugadores (
+  id SERIAL PRIMARY KEY,
+  nombre TEXT NOT NULL,
+  correo TEXT NOT NULL UNIQUE,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
 
-import numpy as np
+CREATE TABLE IF NOT EXISTS formulario_respuestas (
+  jugador_id INTEGER PRIMARY KEY REFERENCES jugadores(id) ON DELETE CASCADE,
+  r2  TEXT,  -- pasión
+  r3  TEXT,  -- dato curioso
+  r4  TEXT,  -- película favorita
+  r6  TEXT,  -- deporte favorito
+  r8  TEXT,  -- prenda imprescindible
+  r9  TEXT,  -- mejor concierto
+  r10 TEXT,  -- libro/arte favorito
+  r12 TEXT,  -- mascota
+  r13 TEXT,  -- hijos
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
 
-def build_similarity(vecs: List[List[float]]) -> List[List[float]]:
-    M = np.array(vecs, dtype=float)
-    M = M / (np.linalg.norm(M, axis=1, keepdims=True) + 1e-9)
-    return (M @ M.T).tolist()
+-- Resultados del juego Adivina (guardamos por “sesión” de juego)
+CREATE TABLE IF NOT EXISTS adivina_scores (
+  id SERIAL PRIMARY KEY,
+  jugador_id INTEGER NOT NULL REFERENCES jugadores(id) ON DELETE CASCADE,
+  aciertos INTEGER NOT NULL,
+  puntaje INTEGER NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
 
+-- Reto Foto (una foto por jugador)
+CREATE TABLE IF NOT EXISTS reto_foto (
+  id SERIAL PRIMARY KEY,
+  jugador_id INTEGER NOT NULL UNIQUE REFERENCES jugadores(id) ON DELETE CASCADE,
+  filename TEXT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
 
-def hacer_matches(datos: Sequence[Mapping]) -> List[Dict]:
-    textos = [
-        " ".join([
-            d.get("r3", ""), d.get("r4", ""), d.get("r6", ""), d.get("r8", ""),
-            d.get("r9", ""), d.get("r2", ""), d.get("r10", ""),
-            d.get("r12_mascota", ""), d.get("r13_hijos", ""),
-        ]).lower()
-        for d in datos
+-- Votos: cada votante puede repartir EXACTAMENTE 3 puntos entre fotos
+CREATE TABLE IF NOT EXISTS reto_foto_votos (
+  id SERIAL PRIMARY KEY,
+  foto_id INTEGER NOT NULL REFERENCES reto_foto(id) ON DELETE CASCADE,
+  votante_id INTEGER NOT NULL REFERENCES jugadores(id) ON DELETE CASCADE,
+  puntos INTEGER NOT NULL CHECK (puntos BETWEEN 1 AND 3),
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  UNIQUE (foto_id, votante_id)
+);
+
+-- Conexión Alfa: emparejamientos 1-a-1 TF-IDF (guardamos bidireccional)
+CREATE TABLE IF NOT EXISTS conexion_matches (
+  id SERIAL PRIMARY KEY,
+  jugador_1 INTEGER NOT NULL REFERENCES jugadores(id) ON DELETE CASCADE,
+  jugador_2 INTEGER NOT NULL REFERENCES jugadores(id) ON DELETE CASCADE,
+  score REAL NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+  UNIQUE (jugador_1),
+  UNIQUE (jugador_2),
+  CHECK (jugador_1 <> jugador_2)
+);
+
+-- Catálogo opcional de retos para poblar /index desde DB (fallback si no)
+CREATE TABLE IF NOT EXISTS retos (
+  id SERIAL PRIMARY KEY,
+  nombre TEXT UNIQUE NOT NULL,
+  url TEXT,
+  tipo TEXT,
+  puntos INTEGER NOT NULL DEFAULT 0,
+  activo BOOLEAN NOT NULL DEFAULT TRUE
+);
+"""
+def ensure_schema():
+    for stmt in [s.strip() for s in DDL.split(";") if s.strip()]:
+        execute(stmt + ";")
+    # seeds básicos de retos (idempotentes)
+    try:
+        execute("""
+        INSERT INTO retos (nombre, url, tipo, puntos, activo) VALUES
+        ('Adivina Quién', '/adivina', 'individual', 0, TRUE),
+        ('Reto Foto', '/reto_foto', 'foto', 0, TRUE),
+        ('Ver Fotos y Votar', '/ver_fotos_reto_foto', 'foto', 0, TRUE),
+        ('Conexión Alfa', '/conexion_alfa', 'ia', 0, TRUE)
+        ON CONFLICT (nombre) DO NOTHING;
+        """)
+    except Exception:
+        pass
+
+ensure_schema()
+
+# ─────────────────────────────────────────────────────────────
+# Decoradores
+# ─────────────────────────────────────────────────────────────
+def login_required(f):
+    @wraps(f)
+    def _wrap(*args, **kwargs):
+        if "jugador_id" not in session:
+            return redirect(url_for("login"))
+        return f(*args, **kwargs)
+    return _wrap
+
+def admin_required(f):
+    @wraps(f)
+    def _wrap(*args, **kwargs):
+        if session.get("is_admin"):
+            return f(*args, **kwargs)
+        tok = request.args.get("token") or request.form.get("token")
+        if tok and tok == ADMIN_TOKEN:
+            session["is_admin"] = True
+            return f(*args, **kwargs)
+        return "No autorizado", 403
+    return _wrap
+
+# ─────────────────────────────────────────────────────────────
+# Utilidades
+# ─────────────────────────────────────────────────────────────
+def get_jugador_by_correo(correo: str):
+    rows = query("SELECT * FROM jugadores WHERE correo=%s", (correo,))
+    return rows[0] if rows else None
+
+def upsert_jugador(nombre: str, correo: str):
+    row = get_jugador_by_correo(correo)
+    if row:
+        return row
+    execute("INSERT INTO jugadores (nombre, correo) VALUES (%s,%s)", (nombre, correo))
+    return get_jugador_by_correo(correo)
+
+def get_respuestas(jugador_id: int):
+    rows = query("SELECT * FROM formulario_respuestas WHERE jugador_id=%s", (jugador_id,))
+    return rows[0] if rows else None
+
+# ─────────────────────────────────────────────────────────────
+# Index / Home
+# ─────────────────────────────────────────────────────────────
+def _retos_desde_db_o_fallback():
+    try:
+        rows = query("SELECT id, nombre, COALESCE(activo, TRUE) AS activo, COALESCE(puntos,0) AS puntos FROM retos ORDER BY id ASC")
+        if rows:
+            # Adaptador simple para que Jinja use reto.activo
+            return [type("Reto", (), {"id": r["id"], "nombre": r["nombre"], "activo": bool(r["activo"]), "puntos": r["puntos"]}) for r in rows]
+    except Exception:
+        pass
+    base = [
+        {"id": 1, "nombre": "Adivina Quién",     "activo": True, "puntos": 0},
+        {"id": 2, "nombre": "Reto Foto",         "activo": True, "puntos": 0},
+        {"id": 3, "nombre": "Ver Fotos y Votar", "activo": True, "puntos": 0},
+        {"id": 4, "nombre": "Conexión Alfa",     "activo": True, "puntos": 0},
     ]
-    embeddings = embed_texts(textos)
-    S = build_similarity(embeddings)
+    return [type("Reto", (), x) for x in base]
 
-    n = len(datos)
-    usados: set[int] = set()
-    pares: list[Dict] = []
-    for i in range(n):
-        if i in usados:
-            continue
-        mejor_j, mejor_sim = None, -1.0
-        for j in range(n):
-            if j == i or j in usados:
-                continue
-            if S[i][j] > mejor_sim:
-                mejor_j, mejor_sim = j, S[i][j]
-        if mejor_j is not None:
-            usados.update({i, mejor_j})
-            pares.append({
-                "correo_1": datos[i]["correo"],
-                "correo_2": datos[mejor_j]["correo"],
-                "nombre_1": datos[i]["nombre"],
-                "nombre_2": datos[mejor_j]["nombre"],
-                "perfil_1": datos[i]["perfil_ia"],
-                "perfil_2": datos[mejor_j]["perfil_ia"],
-                "score": round(float(mejor_sim), 2),
-            })
-    return pares
+@app.route("/")
+def home():
+    if "jugador_id" not in session:
+        return redirect(url_for("login"))
+    return redirect(url_for("index_page"))
 
-# ──────────────────── FLASK HELPERS ─────────────────────
+@app.route("/index")
+@login_required
+def index_page():
+    retos = _retos_desde_db_o_fallback()
+    if "jugador" not in session:
+        session["jugador"] = session.get("nombre", "Jugador")
+    # Debes tener un archivo index.html en la raíz (donde están tus otras plantillas)
+    return render_template("index.html", retos=retos)
 
-@app.before_request
-def make_session_permanent():
-    session.permanent = True
-
-
-def login_required(view):
-    @wraps(view)
-    def wrapped(*args, **kwargs):
-        if "jugador" not in session:
-            return redirect(url_for("login", next=request.path))
-        return view(*args, **kwargs)
-    return wrapped
-
-# ──────────── GPT helper ─────────────
-
-def explicar_match_gpt(perfil1: str, perfil2: str, score: float) -> str | None:
-    prompt = (
-        "Eres un coach de networking.\n"
-        f"Persona A:\n{perfil1}\n\n"
-        f"Persona B:\n{perfil2}\n\n"
-        f"Similaridad global: {score:.2f}\n\n"
-        "Genera un párrafo de 3‑4 líneas explicando por qué harían una buena conexión "
-        "y sugiere un tema concreto para iniciar la conversación."
-    )
-    try:
-        resp = openai.ChatCompletion.create(
-            model="gpt-3.5-turbo",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=120,
-            temperature=0.7,
-        )
-        return resp.choices[0].message.content.strip()
-    except OpenAIError as e:
-        print("⚠️  GPT error:", e)
-        return None
-
-# ───────────────────────── LOGIN ─────────────────────────
-
+# ─────────────────────────────────────────────────────────────
+# Login / Logout
+# ─────────────────────────────────────────────────────────────
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    next_url = request.args.get("next", "/")
-    if request.method == "POST":
-        jugador = request.form.get("jugador", "").strip()
-        correo = request.form.get("correo", "").strip()
-        if not jugador or not correo:
-            flash("⚠️ Debes indicar nombre y correo")
-            return render_template("login.html", next=next_url)
-        session.update({"jugador": jugador, "correo": correo})
-        flash(f"¡Bienvenido, {jugador}!")
-        conn = get_db_connection()
-
-        ya = conn.execute(
-        "SELECT 1 FROM conexion_alfa_respuestas WHERE correo = %s",
-        (correo,)
-        ).fetchone()
-        conn.close()          # devolvemos la conexión correctamente
-
-
-        if not ya:
-            return redirect(url_for("conocete_mejor"))
-        return redirect(next_url)
-    return render_template("login.html", next=next_url)
-
-# ───────────────────────── HOME ─────────────────────────
-@app.route("/")
-@login_required
-def index():
-    # 1. conexión Postgres
-    conn = get_db_connection()
-
-    # 2. retos activos
-    row = fetchone(
-        conn,
-        """
-        SELECT json_agg(retos) AS r
-        FROM (SELECT * FROM retos WHERE activo IS TRUE) AS retos
-        """
-    )
-    retos_activos = row["r"] if row and row["r"] else []
-
-    # 3. ranking por códigos-QR (sigue en SQLite local)
-    qr_conn = sqlite3.connect("scan_points.db")
-    qr_conn.row_factory = sqlite3.Row
-    ranking_qr = qr_conn.execute(
-        """
-        SELECT nombre, SUM(puntos) AS total
-        FROM registros
-        GROUP BY nombre
-        ORDER BY total DESC
-        """
-    ).fetchall()
-    qr_conn.close()
-
-    # 4. ¡recuerda devolver la conexión al pool!
-    conn.close()
-
-    return render_template(
-        "index.html",
-        retos=retos_activos,
-        ranking_qr=ranking_qr,
-        modo_foto_equipo=False,
-    )
-# --------------------------- CONÓCETE MEJOR ---------------------------
-
-@app.route("/conocete_mejor", methods=["GET", "POST"])
-@login_required
-def conocete_mejor():
     if request.method == "GET":
-        conn = get_db_connection()
-        ya = conn.execute(
-        "SELECT 1 FROM conexion_alfa_respuestas WHERE correo = %s",
-        (session["correo"],)
-        ).fetchone()
-        conn.close()
-        return render_template("preguntas_post_login.html", ya_respondio=bool(ya))
+        return render_template("login.html")
 
-    f = request.form.get
-    nombre, correo = session["jugador"], session["correo"]
-    data = {
-        k: f(k, "").strip() for k in ("r2","r3","r4","r6","r8","r9","r10")
-    }
-    data["r12_mascota"] = f("r12", "").strip()
-    data["r13_hijos"] = f("r13", "").strip()
+    nombre = (request.form.get("nombre") or "").strip()
+    correo = (request.form.get("correo") or "").strip().lower()
 
-    perfil = generar_perfil_ia(
-        nombre,
-        dato_curioso=data["r3"], pelicula=data["r4"], deporte=data["r6"],
-        prenda=data["r8"], concierto=data["r9"], pasion=data["r2"],
-        libro=data["r10"], mascota=data["r12_mascota"], hijos=data["r13_hijos"],
-    )
+    if not nombre or not correo or "@" not in correo:
+        flash("Nombre y correo válidos son requeridos.")
+        return redirect(url_for("login"))
 
-    columnas = (
-        "correo, nombre, r2, r3, r4, r6, r8, r9, r10, r12_mascota, r13_hijos, perfil_ia"
-    )
-    placeholders = ", ".join(["%s"] * 12)
-    conn = get_db_connection()
-    with conn.cursor() as cur:
-        cur.execute(
-            f"""
-            INSERT INTO conexion_alfa_respuestas ({columnas})
-            VALUES ({placeholders})
-            ON CONFLICT (correo) DO UPDATE SET
-                nombre         = EXCLUDED.nombre,
-                r2             = EXCLUDED.r2,
-                r3             = EXCLUDED.r3,
-                r4             = EXCLUDED.r4,
-                r6             = EXCLUDED.r6,
-                r8             = EXCLUDED.r8,
-                r9             = EXCLUDED.r9,
-                r10            = EXCLUDED.r10,
-                r12_mascota    = EXCLUDED.r12_mascota,
-                r13_hijos      = EXCLUDED.r13_hijos,
-                perfil_ia      = EXCLUDED.perfil_ia
-            """,
-            (
-                correo, nombre,
-                data["r2"], data["r3"], data["r4"], data["r6"], data["r8"], data["r9"], data["r10"],
-                data["r12_mascota"], data["r13_hijos"], perfil,
-            ),
+    jugador = upsert_jugador(nombre, correo)
+    session["jugador_id"] = jugador["id"]
+    session["nombre"] = jugador["nombre"]
+    session["correo"] = jugador["correo"]
+    session["jugador"] = jugador["nombre"]  # para index.html
+
+    if not get_respuestas(jugador["id"]):
+        return redirect(url_for("preguntas_post_login"))
+    return redirect(url_for("index_page"))
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+# ─────────────────────────────────────────────────────────────
+# Formulario post-login (alimenta Adivina + Conexión Alfa)
+# ─────────────────────────────────────────────────────────────
+@app.route("/preguntas_post_login", methods=["GET", "POST"])
+@login_required
+def preguntas_post_login():
+    jugador_id = session["jugador_id"]
+    ya_respondio = bool(get_respuestas(jugador_id))
+
+    if request.method == "GET":
+        return render_template("preguntas_post_login.html", ya_respondio=ya_respondio)
+
+    campos = ["r2","r3","r4","r6","r8","r9","r10","r12","r13"]
+    valores = [request.form.get(k,"").strip() for k in campos]
+
+    if ya_respondio:
+        execute(
+            "UPDATE formulario_respuestas SET r2=%s,r3=%s,r4=%s,r6=%s,r8=%s,r9=%s,r10=%s,r12=%s,r13=%s WHERE jugador_id=%s",
+            (*valores, jugador_id)
         )
-    conn.commit()
-    conn.close()          # ← devuelve la conexión al pool
-    flash("✅ Respuestas guardadas. ¡Gracias!")
-    return redirect(url_for("index"))
-
-# --------------------- GENERAR MATCHES (ADMIN) ----------------------
-
-@app.route("/generar_matches_conexion_alfa", methods=["GET", "POST"])
-def generar_matches_conexion_alfa():
-    # sólo admins
-    if not admin_ok(request):
-        flash("⚠️ Sólo el administrador puede generar matches")
-        return redirect("/admin_panel")
-
-    conn = get_db_connection()
-    datos = conn.execute("SELECT * FROM conexion_alfa_respuestas").fetchall()
-    if len(datos) < 2:
-        conn.close()
-        flash("❌ Necesitas al menos 2 participantes")
-        return redirect("/admin_panel")
-
-    pares = hacer_matches(datos)
-
-    cur = conn.cursor()
-    cur.execute("SELECT correo_1, correo_2 FROM conexion_alfa_matches")
-    ya = {tuple(sorted((r["correo_1"], r["correo_2"]))) for r in cur.fetchall()}
-
-    nuevos = 0
-    for p in pares:
-        key = tuple(sorted((p["correo_1"], p["correo_2"])))
-        if key in ya:
-            continue
-        razon = (
-            explicar_match_gpt(p["perfil_1"], p["perfil_2"], p["score"])
-            or f"🤖 Match IA · similitud {p['score']*100:.0f}%"
+    else:
+        execute(
+            "INSERT INTO formulario_respuestas (jugador_id,r2,r3,r4,r6,r8,r9,r10,r12,r13) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (jugador_id, *valores)
         )
-        cur.execute(
-            """
-            INSERT INTO conexion_alfa_matches
-                  (correo_1, correo_2, nombre_1, nombre_2,
-                   perfil_1, perfil_2, razon_match)
-            VALUES (%s,%s,%s,%s,%s,%s,%s)
-            """,
-            (p["correo_1"], p["correo_2"],
-             p["nombre_1"], p["nombre_2"],
-             p["perfil_1"], p["perfil_2"], razon)
-        )
-        nuevos += 1
 
-    conn.commit()
-    conn.close()
-    flash(f"✅ {nuevos} matches creados")
-    return redirect("/admin_panel")
+    flash("¡Gracias! Tus respuestas han sido guardadas.")
+    return redirect(url_for("index_page"))
 
+# ─────────────────────────────────────────────────────────────
+# Adivina Quién
+# ─────────────────────────────────────────────────────────────
+def _adivina_participantes():
+    rows = query("""
+      SELECT j.id, j.nombre,
+             r.r2, r.r3, r.r4, r.r6, r.r8, r.r9, r.r10, r.r12, r.r13
+      FROM jugadores j
+      JOIN formulario_respuestas r ON r.jugador_id=j.id
+      ORDER BY j.nombre
+    """)
+    participantes = []
+    for x in rows:
+        participantes.append({
+            "id": x["id"],
+            "nombre_completo": x["nombre"],
+            "pasion": x["r2"] or "",
+            "dato_curioso": x["r3"] or "",
+            "pelicula_favorita": x["r4"] or "",
+            "deporte_favorito": x["r6"] or "",
+            "prenda_imprescindible": x["r8"] or "",
+            "mejor_concierto": x["r9"] or "",
+            "libro_favorito": x["r10"] or "",
+            "mascota": x["r12"] or "",
+            "hijos": x["r13"] or "",
+        })
+    return participantes
 
-# ------------------- RETO ADIVINA – pantalla de juego -------------------
 @app.route("/adivina")
 @login_required
 def adivina():
-    """
-    Carga la plantilla con las cartas de los participantes.
-    Si aún no hay contenido en adivina_participantes
-    muestra un mensaje amigable al usuario.
-    """
-    conn = get_db_connection()
-    participantes = conn.execute(
-        "SELECT * FROM adivina_participantes ORDER BY RANDOM()"
-    ).fetchall()
-    conn.close()
+    participantes = _adivina_participantes()
+    match_name = None
+    my_id = session["jugador_id"]
+    m = query("""SELECT cm.jugador_2, j2.nombre AS nombre_2
+                 FROM conexion_matches cm
+                 JOIN jugadores j2 ON j2.id=cm.jugador_2
+                 WHERE cm.jugador_1=%s""", (my_id,))
+    if m:
+        match_name = m[0]["nombre_2"]
+    return render_template("adivina.html", participantes=participantes, match_name=match_name)
 
-    if not participantes:
-        flash("⚠️ El reto aún no está listo. Vuelve más tarde.")
-        return redirect(url_for("index"))
-
-    # `adivina.html` es la misma plantilla que ya usabas en tu app local
-    return render_template("adivina.html", tarjetas=participantes)
-
-# -------------------- RETO ADIVINA – guardar resultados --------------------
-@app.route('/adivina_finalizado', methods=['POST'])
+@app.route("/adivina_finalizado", methods=["POST"])
 @login_required
 def adivina_finalizado():
-    if 'jugador' not in session:
-        return jsonify({"error": "No autenticado"}), 401
+    data = request.get_json(force=True) or {}
+    aciertos = int(data.get("aciertos", 0))
+    puntaje  = int(data.get("puntaje", 0))
+    execute("INSERT INTO adivina_scores (jugador_id,aciertos,puntaje) VALUES (%s,%s,%s)",
+            (session["jugador_id"], aciertos, puntaje))
+    my_id = session["jugador_id"]
+    m = query("""SELECT j2.nombre AS nombre_2
+                 FROM conexion_matches cm JOIN jugadores j2 ON j2.id=cm.jugador_2
+                 WHERE cm.jugador_1=%s""", (my_id,))
+    return jsonify({"ok": True, "message": "¡Resultados guardados!",
+                    "match": (m[0]["nombre_2"] if m else None)})
 
-    data      = request.get_json(force=True) or {}
-    jugador   = session['jugador']
-    puntaje   = int(data.get("puntaje", 0))
-    aciertos  = int(data.get("aciertos", 0))
-
-    conn = get_db_connection()
-
-    # 1️⃣  Evitar doble registro
-    ya = conn.execute(
-        "SELECT 1 FROM adivina_resultados WHERE nombre_jugador = %s",
-        (jugador,)
-    ).fetchone()
-    if ya:
-        conn.close()
-        return jsonify({"error": "Ya has completado el reto"}), 400
-
-    # 2️⃣  Insertar resultado
-    conn.execute(
-        """
-        INSERT INTO adivina_resultados (nombre_jugador, aciertos, puntos_extra)
-        VALUES (%s, %s, %s)
-        """,
-        (jugador, aciertos, puntaje)
-    )
-    conn.commit()
-
-    # 3️⃣  Buscar nombre de match *antes* de cerrar la conexión
-    match_name = obtener_match_para(session["correo"], conn)
-    conn.close()
-
-    return jsonify({
-        "message": (
-            f"🎉 ¡Reto completado! {jugador} acertó {aciertos} nombre(s) "
-            f"y obtuvo {puntaje} pts."
-        ),
-        "redirect": "/ranking_adivina"
-    })
-
-# --- FOTO RETO EQUIPO  (deja sólo ESTA versión) -------------------
-@app.route('/foto_reto/<int:reto_no>', methods=['GET', 'POST'])
-@login_required
-def foto_reto_equipo(reto_no):
-    nombre  = session['jugador']
-    correo  = session['correo']
-    equipo  = session['equipo']
-
-    mensajes = {
-        1: "📸",
-        2: "📸",
-        3: "📸 "
-    }
-    mensaje = mensajes.get(reto_no, "Sube tu foto")
-
-    conn = get_db_connection()
-    ya_existe = conn.execute(
-        "SELECT 1 FROM reto_equipo_foto WHERE equipo=? AND reto_no=?",
-        (equipo, reto_no)
-    ).fetchone()
-
-    if request.method == 'POST' and not ya_existe:
-        archivo = request.files.get('foto')
-        if not archivo:
-            flash("❌ Falta seleccionar la imagen"); return redirect(request.url)
-
-        filename = secure_filename(
-            f"{datetime.now():%Y%m%d%H%M%S}_{archivo.filename}")   # <- sin \
-        carpeta = os.path.join('static', f'fotos_reto_{reto_no}')
-        os.makedirs(carpeta, exist_ok=True)
-        archivo.save(os.path.join(carpeta, filename))
-
-        conn.execute("""
-            INSERT INTO reto_equipo_foto
-            (nombre_participante, correo, equipo, archivo, reto_no)
-            VALUES (?,?,?,?,?)""",
-            (nombre, correo, equipo, filename, reto_no)
-        )
-        conn.commit()
-        flash("✅ Foto recibida. ¡Gracias!")
-        return redirect(url_for('index'))
-
-    conn.close()
-    return render_template('foto_reto_equipo.html',
-                           mensaje=mensaje, equipo=equipo,
-                           reto_no=reto_no, ya_existe=bool(ya_existe))
-
-# ------------------- RANKING ADIVINA --------------------
 @app.route("/ranking_adivina")
 @login_required
 def ranking_adivina():
-    try:
-        conn = get_db_connection()
+    rows = query("""
+      SELECT j.nombre, MAX(s.puntaje) AS puntaje, MAX(s.aciertos) AS aciertos
+      FROM adivina_scores s
+      JOIN jugadores j ON j.id=s.jugador_id
+      GROUP BY j.nombre
+      ORDER BY puntaje DESC, aciertos DESC, j.nombre ASC
+    """)
+    html = ["<h1 style='font-family:Segoe UI'>🏆 Ranking Adivina Quién</h1><ol>"]
+    for r in rows:
+        html.append(f"<li><b>{r['nombre']}</b> — {r['puntaje']} pts, {r['aciertos']} aciertos</li>")
+    html.append("</ol><p><a href='/adivina'>Volver</a></p>")
+    return "\n".join(html)
 
-        resultados = conn.execute("""
-            SELECT nombre_jugador,
-                   aciertos,
-                   puntos_extra,
-                   (aciertos + puntos_extra) AS total,
-                   timestamp
-            FROM adivina_resultados
-            ORDER BY total DESC, timestamp ASC
-        """).fetchall()
+# ─────────────────────────────────────────────────────────────
+# Reto Foto: subir, ver, votar (exactamente 3 puntos por votante)
+# ─────────────────────────────────────────────────────────────
+ALLOWED_EXT = {"png","jpg","jpeg","webp"}
 
-        # Resultado propio (por si quieres sombrearlo en la tabla)
-        mi_resultado = conn.execute(
-            "SELECT * FROM adivina_resultados WHERE nombre_jugador = ?",
-            (session["jugador"],)
-        ).fetchone()
+def _allowed(filename:str)->bool:
+    return "." in filename and filename.rsplit(".",1)[1].lower() in ALLOWED_EXT
 
-        conn.close()
+@app.route("/reto_foto", methods=["GET", "POST"])
+@login_required
+def reto_foto():
+    if request.method == "GET":
+        mine = query("SELECT * FROM reto_foto WHERE jugador_id=%s", (session["jugador_id"],))
+        ya_subio = bool(mine)
+        # Reusa tu plantilla de estilo si quieres; o reemplázala por una propia
+        return render_template("preguntas_post_login.html", ya_respondio=True)
+    # POST: subir foto
+    if "foto" not in request.files:
+        flash("Sube una imagen.")
+        return redirect(url_for("reto_foto"))
+    f = request.files["foto"]
+    if not f.filename or not _allowed(f.filename):
+        flash("Formato no permitido.")
+        return redirect(url_for("reto_foto"))
 
-        # Siempre devolvemos plantilla, incluso si la lista está vacía
-        return render_template(
-            "ranking_adivina.html",
-            resultados=resultados,
-            mi_resultado=mi_resultado
+    if query("SELECT 1 FROM reto_foto WHERE jugador_id=%s", (session["jugador_id"],)):
+        flash("Ya subiste una foto.")
+        return redirect(url_for("ver_fotos"))
+
+    filename = f"{session['jugador_id']}_{secure_filename(f.filename)}"
+    path = os.path.join(FOTOS_DIR, filename)
+    f.save(path)
+
+    execute("INSERT INTO reto_foto (jugador_id,filename) VALUES (%s,%s)",
+            (session["jugador_id"], filename))
+    flash("Foto subida. ¡Gracias!")
+    return redirect(url_for("ver_fotos"))
+
+@app.route("/ver_fotos")
+@login_required
+def ver_fotos():
+    fotos = query("""
+      SELECT rf.id, rf.filename, j.nombre AS dueño
+      FROM reto_foto rf JOIN jugadores j ON j.id=rf.jugador_id
+      ORDER BY rf.created_at DESC
+    """)
+    prev = query("SELECT COALESCE(SUM(puntos),0) AS total FROM reto_foto_votos WHERE votante_id=%s",
+                 (session["jugador_id"],))
+    total_prev = prev[0]["total"] if prev else 0
+
+    html = ["<h1 style='font-family:Segoe UI'>📸 Galería — Reparte EXACTAMENTE 3 puntos</h1>"]
+    html.append("<form method='post' action='/votar_fotos'>")
+    for f in fotos:
+        html.append(
+            f"<div style='margin:10px 0;padding:10px;border:1px solid #444;border-radius:8px'>"
+            f"<img src='/static/fotos_reto_foto/{f['filename']}' style='max-height:120px'><br>"
+            f"<b>{f['dueño']}</b><br>"
+            f"Puntos: <select name='foto_{f['id']}'><option value='0'>0</option>"
+            f"<option>1</option><option>2</option><option>3</option></select></div>"
         )
+    html.append("<button>Guardar votos</button></form>")
+    if total_prev > 0:
+        html.append(f"<p>Llevas {total_prev}/3 puntos asignados.</p>")
+    html.append("<p><a href='/ranking_fotos'>Ver Ranking</a></p>")
+    return "\n".join(html)
 
-    except Exception as e:
-        # Log para depuración en Render
-        print("❌ ERROR ranking_adivina:", e)
-        if "conn" in locals():
-            conn.close()
-        flash("❌ No se pudo mostrar el ranking. Revisa los logs.")
-        # Redirigimos a home para evitar error 500
-        return redirect(url_for("index"))
+@app.route("/votar_fotos", methods=["POST"])
+@login_required
+def votar_fotos():
+    pairs = []
+    total = 0
+    for k, v in request.form.items():
+        m = re.match(r"foto_(\d+)$", k)
+        if not m: 
+            continue
+        foto_id = int(m.group(1))
+        pts = int(v or 0)
+        if pts < 0 or pts > 3:
+            return "Valor inválido", 400
+        if pts > 0:
+            pairs.append((foto_id, pts))
+            total += pts
 
-@app.route('/reset_adivina_quien', methods=['POST'])
+    prev = query("SELECT COALESCE(SUM(puntos),0) AS total FROM reto_foto_votos WHERE votante_id=%s",
+                 (session["jugador_id"],))
+    total_prev = prev[0]["total"] if prev else 0
 
-def reset_adivina_quien():
-    conn = get_db_connection()
-    conn.execute("DELETE FROM adivina_resultados")
-    conn.commit()
-    conn.close()
-    flash("✅ Ranking de Adivina Quién reiniciado correctamente.")
-    return redirect('/admin_panel')
+    if total + total_prev != 3:
+        return f"Debes completar EXACTAMENTE 3 puntos (llevas {total_prev}, propones {total}).", 400
 
-@app.route('/reset_adivina_participantes', methods=['POST'])
-def reset_adivina_participantes():
-    conn = get_db_connection()
-    conn.execute("DELETE FROM adivina_participantes")
-    conn.commit()
-    conn.close()
-    flash("✅ Participantes de Adivina Quién reiniciados correctamente.")
-    return redirect('/admin_panel')
+    for foto_id, pts in pairs:
+        ya = query("""SELECT 1 FROM reto_foto_votos WHERE foto_id=%s AND votante_id=%s""",
+                   (foto_id, session["jugador_id"]))
+        if ya:
+            return "Ya habías votado alguna de estas fotos; no se permiten cambios.", 400
+        execute("""INSERT INTO reto_foto_votos (foto_id,votante_id,puntos) VALUES (%s,%s,%s)""",
+                (foto_id, session["jugador_id"], pts))
 
-@app.route('/generar_contenido_adivina', methods=['POST'])
-def generar_contenido_adivina():
-    conn = get_db_connection()
-    try:
-        # 1. Lee a los participantes que llenaron el cuestionario
-        respuestas = conn.execute('SELECT * FROM conexion_alfa_respuestas').fetchall()
+    flash("¡Votos guardados!")
+    return redirect(url_for("ver_fotos"))
 
-        if not respuestas:
-            flash("❌ Aún no hay participantes que hayan respondido el cuestionario.")
-            return redirect('/admin_panel')
+# Ranking de fotos
+@app.route("/ranking_fotos")
+@login_required
+def ranking_fotos_alias():
+    rows = query("""
+        SELECT j.nombre, COALESCE(SUM(v.puntos),0) AS votos
+        FROM reto_foto rf
+        JOIN jugadores j ON j.id = rf.jugador_id
+        LEFT JOIN reto_foto_votos v ON v.foto_id = rf.id
+        GROUP BY j.nombre
+        ORDER BY votos DESC, j.nombre ASC
+    """)
+    html = ["<h1 style='font-family:Segoe UI'>🏆 Ranking Fotos</h1><ol>"]
+    for r in rows:
+        html.append(f"<li><b>{r['nombre']}</b> — {int(r['votos'])} pts</li>")
+    html.append("</ol><p><a href='/ver_fotos'>Volver</a></p>")
+    return "\n".join(html)
 
-        # 2. Borra los datos anteriores para no duplicar
-        conn.execute("DELETE FROM adivina_participantes")
+# ─────────────────────────────────────────────────────────────
+# Conexión Alfa (TF-IDF local 1-a-1)
+# ─────────────────────────────────────────────────────────────
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
 
-        # 3. Inserta los participantes en la tabla del juego
-        for r in respuestas:
-            conn.execute("""
-                INSERT INTO adivina_participantes (
-                    nombre_completo, pasion, dato_curioso, pelicula_favorita,
-                    deporte_favorito, prenda_imprescindible, mejor_concierto, 
-                    mejor_libro, objetivo_2025
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                r['nombre'], r['r2'], r['r3'], r['r4'], r['r6'], 
-                r['r8'], r['r9'], r['r10'], r['objetivo_2025']
-            ))
+def _perfil_texto(row) -> str:
+    campos = [row.get("r2",""),row.get("r3",""),row.get("r4",""),
+              row.get("r6",""),row.get("r8",""),row.get("r9",""),
+              row.get("r10",""),row.get("r12",""),row.get("r13","")]
+    return " | ".join([c for c in campos if c])
 
-        conn.commit()
+def _build_matches():
+    rows = query("""
+      SELECT j.id, j.nombre, r.*
+      FROM jugadores j JOIN formulario_respuestas r ON r.jugador_id=j.id
+      ORDER BY j.id
+    """)
+    if len(rows) < 2:
+        return []
 
-        num_participantes = len(respuestas)
-        flash(f"✅ ¡Éxito! Se cargaron {num_participantes} participantes al juego.")
+    textos = [_perfil_texto(r) for r in rows]
+    vec = TfidfVectorizer(min_df=1, max_features=3000, ngram_range=(1,2))
+    X = vec.fit_transform(textos)
+    S = cosine_similarity(X)
+    np.fill_diagonal(S, -1.0)
 
-    except Exception as e:
-        flash(f"❌ Ocurrió un error al generar el contenido: {e}")
-    finally:
-        conn.close()
+    triples = []
+    N = len(rows)
+    for i in range(N):
+        for j in range(i+1, N):
+            triples.append((S[i, j], i, j))
+    triples.sort(key=lambda t: t[0], reverse=True)
 
-    return redirect('/admin_panel')
+    asignado = set()
+    parejas = []
+    for score, i, j in triples:
+        if i in asignado or j in asignado:
+            continue
+        asignado.add(i); asignado.add(j)
+        parejas.append((rows[i]["id"], rows[j]["id"], float(score)))
 
-@app.route('/respuestas_curiosas')
-def respuestas_curiosas():
-    conn = get_db_connection()
-    respuestas = conn.execute('SELECT * FROM adivina_participantes').fetchall()
-    conn.close()
+    execute("DELETE FROM conexion_matches")
+    for a,b,sc in parejas:
+        execute("INSERT INTO conexion_matches (jugador_1,jugador_2,score) VALUES (%s,%s,%s)", (a,b,sc))
+        execute("INSERT INTO conexion_matches (jugador_1,jugador_2,score) VALUES (%s,%s,%s)", (b,a,sc))
+    return parejas
 
-    destacados = []
-    for r in respuestas:
-        frases = [
-            f"🎯 Superpoder: {r['superpoder']}",
-            f"🎶 Pasión: {r['pasion']}",
-            f"🧠 Dato curioso: {r['dato_curioso']}",
-            f"🎬 Película favorita: {r['pelicula_favorita']}",
-        f"🎤 Concierto: {r['mejor_concierto']}",
-    f"📖 Libro favorito: {r['mejor_libro']}",
-    f"🏀 Deporte favorito: {r['deporte_favorito']}",
-    f"🎯 Objetivo 2025: {r['objetivo_2025']}"
-]
-        seleccionadas = random.sample(frases, 3)
-        destacados.append({
-            "nombre": r["nombre_completo"],
-            "frases": seleccionadas
-        })
+@app.route("/conexion_alfa_mi_perfil")
+@login_required
+def conexion_alfa_mi_perfil():
+    me = session["jugador_id"]
+    m = query("""SELECT cm.jugador_2, j2.nombre AS nombre_2, cm.score
+                 FROM conexion_matches cm JOIN jugadores j2 ON j2.id=cm.jugador_2
+                 WHERE cm.jugador_1=%s""", (me,))
+    if not m:
+        _build_matches()
+        m = query("""SELECT cm.jugador_2, j2.nombre AS nombre_2, cm.score
+                     FROM conexion_matches cm JOIN jugadores j2 ON j2.id=cm.jugador_2
+                     WHERE cm.jugador_1=%s""", (me,))
+    nombre_match = m[0]["nombre_2"] if m else None
+    score = m[0]["score"] if m else None
 
-    return render_template("respuestas_curiosas.html", destacados=destacados)
+    myr = query("SELECT * FROM formulario_respuestas WHERE jugador_id=%s", (me,))
+    mr = myr[0] if myr else {}
+    nombre = session.get("nombre")
 
-# ── NUEVO helper (lo pones cerca de otras utilidades) ────────────
-def obtener_match_para(correo_jugador, conn):
-    """
-    Devuelve el nombre del match de la tabla conexion_alfa_matches.
-    """
-    row = conn.execute(
-        """
-        SELECT CASE
-                 WHEN correo_1 = %s THEN nombre_2
-                 ELSE nombre_1
-               END AS match_name
-        FROM   conexion_alfa_matches
-        WHERE  correo_1 = %s OR correo_2 = %s
-        ORDER  BY id ASC
-        LIMIT 1
-        """,
-        (correo_jugador, correo_jugador, correo_jugador)
-    ).fetchone()
-    return row["match_name"] if row else None
+    html = ["<h1 style='font-family:Segoe UI'>🤝 Conexión Alfa</h1>"]
+    if nombre_match:
+        html.append(f"<p><b>{nombre}</b>, tu match sugerido es <b>{nombre_match}</b> "
+                    f"(similitud {score:.2f}).</p>")
+        temas = [("🎶 Pasión", "r2"), ("🧠 Dato curioso","r3"), ("🎬 Película","r4"),
+                 ("🏀 Deporte","r6"), ("🎤 Concierto","r9"), ("📖 Libro/arte","r10")]
+        html.append("<h3>Posibles temas de conversación (basados en tu perfil):</h3><ul>")
+        for label, key in temas:
+            val = mr.get(key,"")
+            if val:
+                html.append(f"<li>{label}: {val}</li>")
+        html.append("</ul>")
+    else:
+        html.append("<p>Todavía no hay suficientes personas para emparejar.</p>")
+    html.append("<p><a href='/index'>Volver al inicio</a></p>")
+    return "\n".join(html)
 
-# -------------------- SUBIR EVIDENCIA INDIVIDUAL --------------------
-@app.route('/subir_evidencia', methods=['POST'])
-def subir_evidencia():
-    if 'jugador' not in session:
-        return redirect('/')
-    nombre = session['jugador']
-    reto_id = request.form.get('reto_id')
-    archivo = request.files.get('archivo')
-    if not archivo or not reto_id:
-        return "❌ Faltan datos", 400
-    nombre_archivo = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{archivo.filename}"
-    ruta_archivo = os.path.join(app.config['UPLOAD_FOLDER'], nombre_archivo)
-    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-    archivo.save(ruta_archivo)
-    conn = get_db_connection()
-    conn.execute("INSERT INTO evidencias (reto_id, nombre_participante, archivo) VALUES (?, ?, ?)",
-                 (reto_id, nombre, nombre_archivo))
-    conn.commit()
-    conn.close()
-    return "✅ Evidencia enviada con éxito"
-
-# -------------------- RETO GRUPAL --------------------
-@app.route('/reto_grupal')
-def reto_grupal():
-    if 'jugador' not in session:
-        return redirect('/')
-    conn = get_db_connection()
-    reto = conn.execute("SELECT nombre FROM retos_grupales ORDER BY RANDOM() LIMIT 1").fetchone()
-    conn.close()
-    return render_template("reto_grupal.html", reto=reto['nombre'])
-
-@app.route('/guardar_reto_grupal', methods=['POST'])
-def guardar_reto_grupal():
-    reto = request.form.get('reto')
-    nombres = request.form.get('nombres')
-    if not reto or not nombres:
-        return "❌ Faltan datos", 400
-    conn = get_db_connection()
-    conn.execute("INSERT INTO participaciones_grupales (reto, nombres_participantes) VALUES (?, ?)", (reto, nombres))
-    conn.commit()
-    conn.close()
-    flash("✅ ¡Gracias! Tu participación fue registrada.")
-    return redirect('/')
-
-# --------------------  ADMIN PANEL  --------------------
-@app.route('/admin_panel', methods=['GET', 'POST'])
+# ─────────────────────────────────────────────────────────────
+# Admin panel
+# ─────────────────────────────────────────────────────────────
+@app.route("/admin_panel", methods=["GET"])
+@admin_required
 def admin_panel():
-    if not (session.get("jugador") or admin_ok(request)):
-        return redirect(url_for('login', next=request.path))
-
-
-    conn = get_db_connection()
-
-    # ── 1. Procesar botones ──────────────────────────────
-    if request.method == 'POST':
-        if 'reto_id' in request.form and 'activo' in request.form:
-            activo_bool = request.form['activo'] in ('1', 'true', 't', 'on')
-            conn.execute(
-                "UPDATE retos SET activo=%s WHERE id=%s",
-                (activo_bool, int(request.form['reto_id']))
-        )
-        conn.commit()
-        flash("✅ Estado de reto actualizado.")
-    elif 'activar_solo' in request.form:
-        objetivo = int(request.form['activar_solo'])
-        conn.execute("UPDATE retos SET activo=FALSE")                  # todos off
-        conn.execute("UPDATE retos SET activo=TRUE  WHERE id=%s", (objetivo,))
-        conn.commit()
-        flash("✅ Solo ese reto quedó activo.")
-
-
-    # ── 2. Datos para la plantilla ───────────────────────
-    retos      = conn.execute("SELECT * FROM retos").fetchall()
-    resultados = conn.execute("""
-        SELECT * FROM adivina_resultados
-        ORDER BY puntos_extra DESC, timestamp ASC
-    """).fetchall()
-    matches    = conn.execute("SELECT * FROM conexion_alfa_matches").fetchall()
-
-    # agrupar fotos: equipo → {reto_no: archivo}
-    filas = conn.execute("""
-        SELECT equipo, reto_no, archivo
-        FROM reto_equipo_foto
-        ORDER BY equipo, reto_no
-    """).fetchall()
+    mensajes = []
+    participantes = query("""
+      SELECT j.id, j.nombre, j.correo, r.r2, r.r3, r.r4, r.r6, r.r8, r.r9, r.r10, r.r12, r.r13
+      FROM jugadores j LEFT JOIN formulario_respuestas r ON r.jugador_id=j.id
+      ORDER BY j.nombre
+    """)
+    resultados = query("""
+      SELECT j.nombre, MAX(s.puntaje) AS puntaje, MAX(s.aciertos) AS aciertos
+      FROM adivina_scores s JOIN jugadores j ON j.id=s.jugador_id
+      GROUP BY j.nombre
+      ORDER BY puntaje DESC, aciertos DESC, j.nombre ASC
+    """)
+    matches = query("""
+      SELECT j1.nombre AS nombre_1, j2.nombre AS nombre_2, cm.score
+      FROM conexion_matches cm
+      JOIN jugadores j1 ON j1.id=cm.jugador_1
+      JOIN jugadores j2 ON j2.id=cm.jugador_2
+      WHERE cm.jugador_1 < cm.jugador_2
+      ORDER BY cm.score DESC
+    """)
+    # Si tienes la tabla retos, úsala; si no, mandamos fallback
+    try:
+        retos = query("SELECT id,nombre,activo,puntos FROM retos ORDER BY id ASC")
+        retos = [type("Reto", (), r) for r in retos]
+    except Exception:
+        retos = [type("Reto", (), x) for x in [
+            {"id":1,"nombre":"Adivina Quién","activo":True,"puntos":0},
+            {"id":2,"nombre":"Reto Foto","activo":True,"puntos":0},
+            {"id":3,"nombre":"Conexión Alfa","activo":True,"puntos":0},
+        ]]
     equipos = {}
-    for f in filas:
-        equipos.setdefault(f["equipo"], {})[f["reto_no"]] = f["archivo"]
-    
-    participantes = conn.execute(
-    "SELECT * FROM conexion_alfa_respuestas ORDER BY nombre"
-    ).fetchall()
-
-    conn.close()
     return render_template("admin_panel.html",
+                           mensajes=mensajes,
                            retos=retos,
                            resultados=resultados,
-                           matches_conexion=matches,
+                           participantes=participantes,
                            equipos=equipos,
-                           participantes=participantes,)
+                           matches_conexion=matches)
 
-# -------------------- RETOS FOTO Y MI6 --------------------
-
-def get_reto_id(nombre_reto):
-    conn = get_db_connection()
-    resultado = conn.execute("SELECT id FROM retos WHERE nombre = ?", (nombre_reto,)).fetchone()
-    conn.close()
-    return resultado["id"] if resultado else None
-
-@app.route('/reto_foto', methods=['GET', 'POST'])
-@app.route('/reto_mi6_v1', methods=['GET', 'POST'])
-@app.route('/reto_mi6_v2', methods=['GET', 'POST'])
-@app.route('/reto_mi6_v3', methods=['GET', 'POST'])
-def reto_foto():
-    if 'jugador' not in session:
-        return redirect('/')
-
-    ruta = request.path.strip("/")
-
-    # Definir información para cada reto
-    config = {
-        "reto_foto": {
-            "nombre_reto": "Reto Foto",
-            "mensaje": "Sube una foto original que represente tu creatividad. Esta será votada por los demás participantes."
-        },
-        "reto_mi6_v1": {
-            "nombre_reto": "MI6 v1",
-            "titulo_visible": "Integridad FARMAPIEL",
-            "mensaje": "📸 Toma una foto que represente cómo haces lo correcto incluso cuando nadie está mirando. Una imagen de integridad, valentía o esfuerzo extra."
-        },
-        "reto_mi6_v2": {
-            "nombre_reto": "MI6 v2",
-            "titulo_visible": "Transparencia FARMAPIEL",
-            "mensaje": "Sube una foto que muestre apertura, honestidad o confianza. La transparencia se refleja cuando actuamos con claridad y coherencia ante los demás."
-        },
-        "reto_mi6_v3": {
-            "nombre_reto": "MI6 v3",
-            "titulo_visible": "Calidad FARMAPIEL",
-            "mensaje": " Comparte una foto que represente excelencia, atención al detalle o mejora continua. La calidad se demuestra en cada acción bien hecha."
-        }
-    }
-
-    datos_reto = config.get(ruta)
-    if not datos_reto:
-        return "❌ Ruta no válida", 404
-
-    reto_id = get_reto_id(datos_reto["nombre_reto"])
-    if reto_id is None:
-        return "❌ El reto no existe en la base de datos", 500
-
-    conn = get_db_connection()
-    correo = session['correo']
-    ya_existe = conn.execute(
-        "SELECT * FROM reto_foto WHERE correo = ? AND reto_id = ?",
-        (correo, reto_id)
-    ).fetchone()
-
-    if request.method == 'POST':
-        if ya_existe:
-            conn.close()
-            return "❌ Ya has subido una foto para este reto."
-
-        archivo = request.files.get('foto')
-        if not archivo:
-            return "❌ No se proporcionó ninguna imagen."
-
-        nombre = session['jugador']
-        filename = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{archivo.filename}"
-        path = os.path.join('static/fotos_reto_foto', filename)
-        os.makedirs('static/fotos_reto_foto', exist_ok=True)
-        archivo.save(path)
-
-        conn.execute(
-            "INSERT INTO reto_foto (correo, nombre, archivo, reto_id) VALUES (?, ?, ?, ?)",
-            (correo, nombre, filename, reto_id)
-        )
-        conn.commit()
-        conn.close()
-        flash("✅ Foto subida con éxito. ¡Gracias por participar!")
-        return redirect('/')
-
-    conn.close()
-    return render_template(
-    "reto_foto.html",
-    ya_existe=ya_existe,
-    mensaje=datos_reto["mensaje"],
-    reto_nombre=datos_reto["titulo_visible"] or datos_reto["nombre_reto"]
-)
-
-from psycopg2 import IntegrityError
-
-@app.route('/ver_fotos_reto_foto', methods=['GET', 'POST'])
-def ver_fotos_reto_foto():
-    if 'correo' not in session:
-        return redirect('/')
-
-    correo = session['correo']
-    conn = get_db_connection()
-
-    # Obtener el reto activo del tipo 'individual' que se llame MI6 o Reto Foto
-    reto = conn.execute('''
-        SELECT * FROM retos
-        WHERE tipo = 'individual' AND activo
-        AND (nombre = 'Reto Foto' OR nombre LIKE 'MI6%')
-        ORDER BY id ASC
-        LIMIT 1
-    ''').fetchone()
-
-    if not reto:
-        conn.close()
-        return "❌ No hay ningún reto de foto activo en este momento."
-
-    reto_id = reto["id"]
-    reto_nombre = reto["nombre"]
-
-    # Verificar si el usuario ya votó en este reto
-    fotos_ids = [row["id"] for row in conn.execute("SELECT * FROM reto_foto WHERE reto_id = ?", (reto_id,)).fetchall()]
-    votos_previos = conn.execute(
-        "SELECT COUNT(*) FROM votos_reto_foto WHERE correo_votante = ? AND id_foto IN (%s)" % ",".join("?"*len(fotos_ids)),
-        [correo] + fotos_ids
-    ).fetchone()[0] if fotos_ids else 0
-
-    # Procesar votos
-    if request.method == 'POST' and votos_previos == 0:
-        total_puntos = sum(int(v) for v in request.form.values() if v.isdigit())
-        if total_puntos > 3:
-            conn.close()
-            return "❌ Solo puedes asignar hasta 3 puntos en total.", 400
-
-        for key, val in request.form.items():
-            if key.startswith("foto_") and val:
-                id_foto = int(key.split("_")[1])
-                puntos = int(val)
-                try:
-                    conn.execute(
-                        "INSERT INTO votos_reto_foto (correo_votante, id_foto, puntos) VALUES (?, ?, ?)",
-                        (correo, id_foto, puntos)
-                    )
-                except psycopg2.IntegrityError:
-                    conn.rollback()      # opcional pero recomendable
-                    continue
-        conn.commit()
-        flash("✅ ¡Tus votos han sido registrados!")
-        return redirect('/ver_fotos_reto_foto')
-
-    fotos = conn.execute("SELECT * FROM reto_foto WHERE reto_id = ?", (reto_id,)).fetchall()
-    votos = conn.execute(
-        "SELECT * FROM votos_reto_foto WHERE correo_votante = ?",
-        (correo,)
-    ).fetchall()
-    votos_dict = {v['id_foto']: v['puntos'] for v in votos}
-    conn.close()
-
-    return render_template(
-        "ver_fotos_reto_foto.html",
-        fotos=fotos,
-        votos=votos_dict,
-        ya_voto=(votos_previos > 0),
-        reto_nombre=reto_nombre
-    )
-@app.route('/ver_fotos_mi6_v1', methods=['GET', 'POST'])
-@app.route('/ver_fotos_mi6_v2', methods=['GET', 'POST'])
-@app.route('/ver_fotos_mi6_v3', methods=['GET', 'POST'])
-def ver_fotos_mi6():
-    if 'correo' not in session:
-        return redirect('/')
-
-    ruta = request.path.strip("/")
-    nombre_reto = {
-        "ver_fotos_mi6_v1": "MI6 v1",
-        "ver_fotos_mi6_v2": "MI6 v2",
-        "ver_fotos_mi6_v3": "MI6 v3"
-    }.get(ruta)
-
-    if not nombre_reto:
-        return "❌ Ruta inválida", 404
-
-    conn = get_db_connection()
-    reto = conn.execute("SELECT * FROM retos WHERE nombre = ?", (nombre_reto,)).fetchone()
-
-    if not reto:
-        conn.close()
-        return "❌ El reto no existe en la base de datos", 500
-
-    reto_id = reto["id"]
-    correo = session["correo"]
-    fotos = conn.execute("SELECT * FROM reto_foto WHERE reto_id = ?", (reto_id,)).fetchall()
-
-    # Revisión de votos
-    fotos_ids = [f["id"] for f in fotos]
-    votos = conn.execute(
-        "SELECT * FROM votos_reto_foto WHERE correo_votante = ? AND id_foto IN (%s)" % ",".join("?" * len(fotos_ids)),
-        [correo] + fotos_ids if fotos_ids else [correo]
-    ).fetchall() if fotos_ids else []
-
-    votos_previos = len(votos)
-    votos_dict = {v['id_foto']: v['puntos'] for v in votos}
-  # ✅ ✅ ✅ PEGA AQUÍ ESTE BLOQUE
-    if request.method == 'POST' and votos_previos == 0:
-        total_puntos = sum(int(v) for v in request.form.values() if v.isdigit())
-        if total_puntos > 3:
-            conn.close()
-            return "❌ Solo puedes asignar hasta 3 puntos en total.", 400
-
-        for key, val in request.form.items():
-            if key.startswith("foto_") and val:
-                id_foto = int(key.split("_")[1])
-                puntos = int(val)
-                try:
-                    conn.execute(
-                        "INSERT INTO votos_reto_foto (correo_votante, id_foto, puntos) VALUES (?, ?, ?)",
-                        (correo, id_foto, puntos)
-                    )
-                except psycopg2.IntegrityError:
-                    continue
-        conn.commit()
-        flash("✅ ¡Tus votos han sido registrados!")
-        return redirect(request.path)
-
-    conn.close()
-
-    return render_template(
-        "ver_fotos_reto_foto.html",
-        fotos=fotos,
-        votos=votos_dict,
-        ya_voto=(votos_previos > 0),
-        reto_nombre=nombre_reto
-    )
-
-@app.route('/votar_fotos', methods=['POST'])
-def votar_fotos():
-    if 'correo' not in session:
-        return redirect('/')
-    correo_votante = session['correo']
-
-    total_puntos = sum(int(v) for v in request.form.values() if v.isdigit())
-    if total_puntos != 3:
-        return "❌ Debes asignar exactamente 3 puntos", 400
-
-    conn = get_db_connection()
-    for id_foto, puntos in request.form.items():
-        if puntos and puntos.isdigit():
-            conn.execute(
-                """
-                INSERT INTO votos_reto_foto (correo_votante, id_foto, puntos)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (correo_votante, id_foto)
-                DO UPDATE SET puntos = EXCLUDED.puntos
-                """,
-                (correo_votante, int(id_foto), int(puntos))
-            )
-    conn.commit()
-    conn.close()
-    return redirect('/')
-
-@app.route('/ranking_fotos')
-def ranking_fotos():
-    if 'jugador' not in session:
-        return redirect('/')
-
-    conn = get_db_connection()
-
-    nombre_reto = request.args.get("reto")
-
-    if nombre_reto:
-        reto = conn.execute("SELECT * FROM retos WHERE nombre = ?", (nombre_reto,)).fetchone()
-    else:
-        reto = conn.execute('''
-            SELECT * FROM retos
-            WHERE tipo = 'individual' AND activo
-            AND (nombre = 'Reto Foto' OR nombre LIKE 'MI6%')
-            ORDER BY id ASC
-            LIMIT 1
-        ''').fetchone()
-
-    if not reto:
-        conn.close()
-        return "❌ No hay reto de foto activo en este momento."
-
-    reto_id = reto['id']
-    reto_nombre = reto['nombre']
-
-    ranking = conn.execute('''
-        SELECT nombre, archivo, SUM(puntos) as total_puntos
-        FROM votos_reto_foto
-        JOIN reto_foto ON votos_reto_foto.id_foto = reto_foto.id
-        WHERE reto_foto.reto_id = ?
-        GROUP BY id_foto
-        ORDER BY total_puntos DESC
-    ''', (reto_id,)).fetchall()
-
-    conn.close()
-    return render_template("ranking_fotos.html", ranking=ranking, reto_nombre=reto_nombre)
-
-@app.route('/reset_reto_foto', methods=['POST'])
-def reset_reto_foto():
-    conn = get_db_connection()
-
-    # Obtener IDs de todos los retos de foto (Reto Foto + MI6)
-    reto_ids = conn.execute(
-        "SELECT id FROM retos WHERE nombre = 'Reto Foto' OR nombre LIKE 'MI6%'"
-    ).fetchall()
-    ids = [str(r["id"]) for r in reto_ids]
-
-    if ids:
-        # Borrar votos solo de esas fotos
-        foto_ids = conn.execute(
-            f"SELECT id FROM reto_foto WHERE reto_id IN ({','.join(['?'] * len(ids))})",
-            ids
-        ).fetchall()
-        foto_ids_int = [str(f["id"]) for f in foto_ids]
-
-        if foto_ids_int:
-            conn.execute(
-                f"DELETE FROM votos_reto_foto WHERE id_foto IN ({','.join(['?'] * len(foto_ids_int))})",
-                foto_ids_int
-            )
-
-        # Borrar fotos
-        conn.execute(
-            f"DELETE FROM reto_foto WHERE reto_id IN ({','.join(['?'] * len(ids))})",
-            ids
-        )
-        conn.commit()
-
-    conn.close()
-
-    # Eliminar archivos del folder
-    carpeta = 'static/fotos_reto_foto'
-    if os.path.exists(carpeta):
-        for archivo in os.listdir(carpeta):
-            ruta = os.path.join(carpeta, archivo)
-            if os.path.isfile(ruta):
-                os.remove(ruta)
-
-    flash("✅ Reto Foto y fotos MI6 reiniciadas correctamente.")
-    return redirect('/admin_panel')
-
-# -------------------- CONEXION ALFA --------------------
-
-@app.route('/conexion_alfa')
-@login_required
-def conexion_alfa():
-    if 'correo' not in session:
-        return redirect('/')
-    
-    return redirect('/conexion_alfa_match')
-
-@app.route('/conexion_alfa_mi_perfil')
-def conexion_alfa_mi_perfil():
-    if 'correo' not in session:
-        return redirect('/')
-
-    conn = get_db_connection()
-    perfil = conn.execute("SELECT * FROM conexion_alfa_respuestas WHERE correo = ?", (session['correo'],)).fetchone()
-    conn.close()
-    return render_template("conexion_alfa_perfil.html", perfil=perfil)
-
-# ----------------- CONEXIÓN ALFA – Matches -----------------
-@app.route('/conexion_alfa_matches', methods=['GET'])
-def conexion_alfa_matches():
-    if 'correo' not in session:
-        return redirect('/')
-
-    correo_usuario = session['correo']
-    conn = get_db_connection()
-
-    # 1. Leer todas las respuestas de los participantes
-    datos = conn.execute("SELECT * FROM conexion_alfa_respuestas").fetchall()
-
-    textos, correos, nombres, perfiles = [], [], [], []
-    for row in datos:
-        # Tomamos todas las respuestas r1…r13 (si existen) y las unimos
-        respuestas = [row.get(f"r{i}", "") or "" for i in range(1, 14)]
-        textos.append(" ".join(respuestas))
-        correos.append(row["correo"])
-        nombres.append(row["nombre"])
-        perfiles.append(row["perfil_ia"])
-
-    # 2. Vectorizar solo **una vez**
-    vectores = vectorizer_ia.transform(textos).toarray()
-    sim      = cosine_similarity(vectores)
-
-    # 3. Pares ya guardados → evitar duplicados
-    ya_guardados = conn.execute(
-        "SELECT correo_1, correo_2 FROM conexion_alfa_matches"
-    ).fetchall()
-    ya_guardados_set = {
-        tuple(sorted((r["correo_1"], r["correo_2"]))) for r in ya_guardados
-    }
-
-    # 4. Bucle “greedy”: cada persona con su par más similar no usado
-    usados = set()
-    for i in range(len(correos)):
-        if i in usados:
-            continue
-
-        mejor_j, mejor_sim = None, -1
-        for j in range(i + 1, len(correos)):
-            if j in usados:
-                continue
-            if sim[i, j] > mejor_sim:
-                mejor_sim = sim[i, j]
-                mejor_j   = j
-
-        if mejor_j is None:
-            continue
-
-        correo1, correo2 = correos[i], correos[mejor_j]
-        pareja           = tuple(sorted((correo1, correo2)))
-        if pareja in ya_guardados_set:
-            continue      # ya existe en la base
-
-        # Explicación sencilla (puedes cambiar por `explicar_match_gpt` si lo prefieres)
-        razon = f"🤖 Compatibilidad IA {mejor_sim*100:.0f}%"
-
-        conn.execute(
-            """
-            INSERT INTO conexion_alfa_matches
-                  (correo_1, correo_2, nombre_1, nombre_2, perfil_1, perfil_2, razon_match)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                correo1, correo2,
-                nombres[i], nombres[mejor_j],
-                perfiles[i], perfiles[mejor_j],
-                razon,
-            ),
-        )
-        usados.update({i, mejor_j})
-
-    conn.commit()
-
-    # 5. Matches propios para mostrar
-    matches = conn.execute(
-        """
-        SELECT * FROM conexion_alfa_matches
-        WHERE correo_1 = ? OR correo_2 = ?
-        """,
-        (correo_usuario, correo_usuario),
-    ).fetchall()
-
-    # 6. Métricas de feedback
-    feedbacks = conn.execute(
-        "SELECT feedback FROM conexion_alfa_matches WHERE feedback IS NOT NULL"
-    ).fetchall()
-    total      = len(feedbacks)
-    positivos  = sum(f["feedback"] == 1 for f in feedbacks)
-    negativos  = sum(f["feedback"] == 0 for f in feedbacks)
-
-    if total:
-        accuracy  = round(positivos / total, 2)
-        precision = round(positivos / (positivos + negativos), 2) if (positivos + negativos) else 0
-        recall    = round(positivos / total, 2)
-        f1        = round(2 * precision * recall / (precision + recall), 2) if (precision + recall) else 0
-    else:
-        accuracy = precision = recall = f1 = None
-
-    conn.close()
-    return render_template(
-        "conexion_alfa_matches.html",
-        matches=matches,
-        accuracy=accuracy,
-        precision=precision,
-        recall=recall,
-        f1=f1,
-    )
-
-@app.route('/confirmar_match', methods=['POST'])
-def confirmar_match():
-    match_id = request.form.get('match_id')
-    respuesta = int(request.form.get('respuesta'))
-    conn = get_db_connection()
-    conn.execute("UPDATE conexion_alfa_matches SET feedback = ? WHERE id = ?", (respuesta, match_id))
-    conn.commit()
-    conn.close()
-    flash("✅ ¡Gracias por tu respuesta!")
-    return redirect('/conexion_alfa_matches')
-
-@app.route('/subir_foto_match', methods=['GET', 'POST'])
-def subir_foto_match():
-    if 'correo' not in session:
-        return redirect('/')
-
-    correo = session['correo']
-    conn = get_db_connection()
-    match = conn.execute('''
-        SELECT * FROM conexion_alfa_matches 
-        WHERE (correo_1 = ? OR correo_2 = ?)
-        LIMIT 1
-    ''', (correo, correo)).fetchone()
-
-    if not match:
-        conn.close()
-        flash("❌ No tienes un match asignado.")
-        return redirect(url_for('conexion_alfa'))
-
-    if match['evidencia']:
-         flash("✅ Este equipo ya subió su foto de evidencia.")
-         return redirect(url_for('conexion_alfa_match'))
-
-    if request.method == 'POST':
-        archivo = request.files.get('foto')
-        if archivo and archivo.filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-            nombre_archivo = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{archivo.filename}"
-            carpeta = os.path.join('static', 'evidencias_alfa')
-            os.makedirs(carpeta, exist_ok=True)
-            ruta = os.path.join(carpeta, nombre_archivo)
-
-            try:
-                archivo.save(ruta)
-                conn.execute('UPDATE conexion_alfa_matches SET evidencia = ? WHERE id = ?',
-                             (nombre_archivo, match['id']))
-                conn.commit()
-                flash("✅ ¡Excelente! Foto subida exitosamente.")
-                return redirect(url_for('conexion_alfa_match'))
-            except Exception as e:
-                flash(f"❌ Error al guardar la foto: {e}")
-        else:
-            flash("❌ Formato de archivo no válido. Usa png, jpg o jpeg.")
-
-    conn.close()
-    # Se renderiza una plantilla genérica para subir la foto.
-    return render_template('conexion_alfa_subir_foto.html', match=match)
-
-@app.route('/conexion_alfa_match')
-def conexion_alfa_match():
-    if 'correo' not in session:
-        return redirect('/')
-
-    correo = session['correo']
-    conn = get_db_connection()
-
-    # Buscar match si existe
-    match = conn.execute('''
-        SELECT * FROM conexion_alfa_matches 
-        WHERE correo_1 = ? OR correo_2 = ?
-        LIMIT 1
-    ''', (correo, correo)).fetchone()
-
-    feedback_dado = match['feedback'] if match and match['feedback'] is not None else None
-
-    conn.close()
-    return render_template(
-        "conexion_alfa_match.html",
-        match=match,
-        sin_match=(match is None),
-        feedback_dado=feedback_dado
-    )
-
-@app.route('/api/conexion_alfa_match', methods=['POST'])
-def api_conexion_alfa_match():
-
-    data = request.get_json()
-    participantes = data.get("participantes", [])
-
-    if not participantes or len(participantes) < 2:
-        return jsonify({"error": "No hay suficientes participantes"}), 400
-
-    textos, correos, nombres, perfiles, respuestas_dict = [], [], [], [], []
-
-    for p in participantes:
-        respuestas = [p.get(f"r{i}", "") or "" for i in range(1, 8)]
-        textos.append(" ".join(respuestas))
-        correos.append(p["correo"])
-        nombres.append(p["nombre"])
-        perfiles.append(p.get("perfil_ia", ""))
-        respuestas_dict.append(p) # Guardamos el diccionario completo
-
-    vectores = vectorizer_ia.transform(textos).toarray()
-
-    usados = set()
-    matches = []
-
-    for i in range(len(correos)):
-        if i in usados: continue
-
-        mejor_j = None
-        mejor_sim = -1
-
-        for j in range(i + 1, len(correos)):
-            if j in usados: continue
-            sim = cosine_similarity([vectores[i]], [vectores[j]])[0][0]
-            if sim > mejor_sim:
-                mejor_sim = sim
-                mejor_j = j
-
-        if mejor_j is not None:
-            p1 = respuestas_dict[i]
-            p2 = respuestas_dict[mejor_j]
-
-            # --- Lógica para encontrar temas en común ---
-            temas_comunes = []
-            if p1.get('r4') and p1['r4'] == p2.get('r4'):
-                temas_comunes.append(f"su película favorita en común: '{p1['r4']}'")
-            if p1.get('r6') and p1['r6'] == p2.get('r6'):
-                temas_comunes.append(f"su gusto por el deporte: '{p1['r6']}'")
-            if p1.get('r2') and p1['r2'] == p2.get('r2'):
-                temas_comunes.append(f"su pasión por '{p1['r2']}'")
-
-            razon_match = f"Tienen una alta compatibilidad ({round(mejor_sim * 100)}%). "
-            if temas_comunes:
-                razon_match += "La IA detectó que coinciden en " + " y ".join(temas_comunes) + "."
-
-            temas_sugeridos = [
-                f"pueden conversar sobre qué es lo que más les gusta de '{p1.get('r4', 'el cine')}'",
-                f"sería un gran tema para romper el hielo hablar de su pasión por '{p1.get('r2', 'sus hobbies')}'",
-                f"podrían compartir su opinión sobre el mejor concierto al que han ido, como el de '{p1.get('r9', 'su artista favorito')}'"
-            ]
-            random.shuffle(temas_sugeridos)
-
-            razon_final = (f"{razon_match}\n\n"
-                           f"**Para romper el hielo:**\n"
-                           f"La IA sugiere que {temas_sugeridos[0]}.")
-
-            matches.append({
-                "correo_1": correos[i], "correo_2": correos[mejor_j],
-                "nombre_1": nombres[i], "nombre_2": nombres[mejor_j],
-                "perfil_1": perfiles[i], "perfil_2": perfiles[mejor_j],
-                "razon": razon_final
-            })
-            usados.add(i)
-            usados.add(mejor_j)
-
-    return jsonify({"matches": matches})
-
-@app.route('/reset_conexion_alfa', methods=['POST'])
-def reset_conexion_alfa():
-    conn = get_db_connection()
-
-    # Borrar registros de la base de datos
-    conn.execute("DELETE FROM conexion_alfa_matches")
-    conn.execute("DELETE FROM conexion_alfa_respuestas")
-    conn.commit()
-    conn.close()
-
-    # Borrar archivos de evidencia de video
-    carpeta = 'static/evidencias_alfa'
-    if os.path.exists(carpeta):
-        for archivo in os.listdir(carpeta):
-            ruta = os.path.join(carpeta, archivo)
-            if os.path.isfile(ruta):
-                os.remove(ruta)
-
-    flash("✅ Conexión Alfa reiniciado correctamente.")
-    return redirect('/admin_panel')
-
-@app.route('/forzar_matches_conexion_alfa', methods=['POST'])
-def forzar_matches_conexion_alfa():
-    import subprocess
-    subprocess.call(["python", "generar_matches_conexion_alfa.py"])
-    flash("✅ Matches de Conexión Alfa generados correctamente.")
-    return redirect('/admin_panel')
-
-@app.route('/reset_datos_participantes', methods=['POST'])
-def reset_datos_participantes():
-    conn = get_db_connection()
-    conn.execute("DELETE FROM conexion_alfa_respuestas")
-    conn.execute("DELETE FROM adivina_participantes")
-    conn.commit()
-    conn.close()
-    flash("✅ Datos de participantes reiniciados. Todos podrán volver a llenar el formulario.")
-    return redirect('/admin_panel')
-
-@app.route('/eliminar_todos_los_jugadores', methods=['POST'])
+@app.route("/eliminar_todos_los_jugadores", methods=["POST"])
+@admin_required
 def eliminar_todos_los_jugadores():
-    conn = get_db_connection()
-    conn.execute("DELETE FROM jugadores")
-    conn.execute("DELETE FROM conexion_alfa_respuestas")
-    conn.execute("DELETE FROM conexion_alfa_matches")
-    conn.execute("DELETE FROM adivina_resultados")
-    conn.execute("DELETE FROM adivina_participantes")
-    conn.commit()
-    conn.close()
-    session.clear()  # Limpiar sesión activa
-    flash("✅ Se eliminaron todos los jugadores, respuestas y sesiones.")
-    return redirect('/admin_panel')
+    execute("DELETE FROM conexion_matches")
+    execute("DELETE FROM reto_foto_votos")
+    execute("DELETE FROM reto_foto")
+    execute("DELETE FROM adivina_scores")
+    execute("DELETE FROM formulario_respuestas")
+    execute("DELETE FROM jugadores")
+    # Limpia fotos
+    for fn in os.listdir(FOTOS_DIR):
+        try: os.remove(os.path.join(FOTOS_DIR, fn))
+        except Exception: pass
+    flash("Todos los jugadores y datos fueron eliminados.")
+    return redirect(url_for("admin_panel"))
 
-@app.route('/feedback_match', methods=['POST'])
-def feedback_match():
-    if 'correo' not in session:
-        return redirect('/')
-
-    feedback = int(request.form.get('feedback'))
-    match_id = int(request.form.get('match_id'))
-
-    conn = get_db_connection()
-    conn.execute("UPDATE conexion_alfa_matches SET feedback = ? WHERE id = ?", (feedback, match_id))
-    conn.commit()
-    conn.close()
-    
-    flash("✅ Gracias por tu feedback sobre la conexión.")
-    return redirect("/conexion_alfa_match")
-
-# -------------------- SUBE TU FOTO --------------------
-@app.route('/sube_tu_foto', methods=['GET', 'POST'])
-def sube_tu_foto():
-    if 'jugador' not in session:
-        return redirect('/')
-
-    correo = session['correo']
-    nombre = session['jugador']
-    conn = get_db_connection()
-
-    ya_existe = conn.execute("SELECT * FROM reto_equipo_foto WHERE correo = ?", (correo,)).fetchone()
-
-    if request.method == 'POST':
-        equipo = request.form.get('equipo')
-        archivo = request.files.get('foto')
-
-        if not equipo or not archivo:
-            flash("❌ Faltan datos.")
-            return redirect('/sube_tu_foto')
-
-        nombre_archivo = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{archivo.filename}"
-        carpeta = os.path.join('static/fotos_equipo')
-        os.makedirs(carpeta, exist_ok=True)
-        archivo.save(os.path.join(carpeta, nombre_archivo))
-
-        conn.execute(
-            "INSERT INTO reto_equipo_foto (nombre_participante, correo, equipo, archivo) VALUES (?, ?, ?, ?)",
-            (nombre, correo, equipo, nombre_archivo)
-        )
-        conn.commit()
-        conn.close()
-
-        flash("✅ Foto subida con éxito.")
-        return redirect('/')
-    
-    conn.close()
-    return render_template("reto_equipo_foto.html", ya_existe=ya_existe)
-
-@app.route('/reto_equipo_foto', methods=['GET', 'POST'])
-def reto_equipo_foto():
-    if 'jugador' not in session:
-        return redirect('/login')
-
-    nombre = session.get('jugador')
-    correo = session.get('correo')
-
-    conn = get_db_connection()
-    ya_existe = conn.execute("SELECT * FROM reto_equipo_foto WHERE correo = ?", (correo,)).fetchone()
-
-    if request.method == 'POST':
-        equipo = request.form.get('equipo')
-        archivo = request.files.get('foto')
-
-        if not equipo or not archivo:
-            flash("❌ Faltan datos.")
-            return redirect('/reto_equipo_foto')
-
-        nombre_archivo = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{archivo.filename}"
-        carpeta = os.path.join('static/fotos_equipo')
-        os.makedirs(carpeta, exist_ok=True)
-        ruta = os.path.join(carpeta, nombre_archivo)
-        archivo.save(ruta)
-
-        conn.execute(
-            '''
-            INSERT INTO reto_equipo_foto (nombre_participante, correo, equipo, archivo)
-            VALUES (?, ?, ?, ?)
-            ''',
-            (nombre, correo, equipo, nombre_archivo)
-        )
-        conn.commit()
-        conn.close()
-
-        flash("✅ Foto subida exitosamente.")
-        return redirect('/')
-
-    conn.close()
-    return render_template('reto_equipo_foto.html', ya_existe=ya_existe)
-
-@app.route('/ver_fotos_equipo')
-def ver_fotos_equipo():
-    conn  = get_db_connection()
-    filas = conn.execute("""
-        SELECT equipo, reto_no, archivo
-        FROM reto_equipo_foto
-        ORDER BY equipo, reto_no
-    """).fetchall()
-    conn.close()
-
-    equipos = {}
-    for f in filas:
-        equipos.setdefault(f['equipo'], {})[f['reto_no']] = f['archivo']
-
-    return render_template("ver_fotos_equipo.html", equipos=equipos)
-
-@app.route('/reset_reto_equipo_foto', methods=['POST'])
+@app.route("/reset_reto_equipo_foto", methods=["POST"])
+@admin_required
 def reset_reto_equipo_foto():
-    conn = get_db_connection()
-    conn.execute("DELETE FROM reto_equipo_foto")
-    conn.commit()
-    conn.close()
+    execute("DELETE FROM reto_foto_votos")
+    execute("DELETE FROM reto_foto")
+    for fn in os.listdir(FOTOS_DIR):
+        try: os.remove(os.path.join(FOTOS_DIR, fn))
+        except Exception: pass
+    flash("Reto foto reiniciado.")
+    return redirect(url_for("admin_panel"))
 
-    # Eliminar archivos físicamente del folder
-    carpeta = 'static/fotos_equipo'
-    if os.path.exists(carpeta):
-        for archivo in os.listdir(carpeta):
-            ruta = os.path.join(carpeta, archivo)
-            if os.path.isfile(ruta):
-                os.remove(ruta)
+@app.route("/generar_contenido_adivina", methods=["POST"])
+@admin_required
+def generar_contenido_adivina():
+    flash("Adivina Quién usa las respuestas actuales como base de pistas (no requiere pre-carga).")
+    return redirect(url_for("admin_panel"))
 
-    flash("✅ Todas las fotos del reto 'Sube tu foto' han sido eliminadas.")
-    return redirect('/admin_panel')
+@app.route("/generar_matches_conexion_alfa", methods=["POST"])
+@admin_required
+def generar_matches_conexion_alfa():
+    parejas = _build_matches()
+    flash(f"Se generaron {len(parejas)} parejas (1-a-1) para Conexión Alfa.")
+    return redirect(url_for("admin_panel"))
 
-# -------------------- RUN --------------------
-if __name__ == '__main__':
-    os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-    os.makedirs(app.config['UPLOAD_FOLDER_GRUPAL'], exist_ok=True)
-    os.makedirs('static/fotos_reto_foto', exist_ok=True)
-    app.run(debug=True)
+# ─────────────────────────────────────────────────────────────
+# Rutas alias para compatibilidad con tu index
+# ─────────────────────────────────────────────────────────────
+@app.route("/ver_fotos_reto_foto")
+@login_required
+def ver_fotos_reto_foto_alias():
+    return redirect(url_for("ver_fotos"))
+
+@app.route("/conexion_alfa")
+@login_required
+def conexion_alfa_alias():
+    return redirect(url_for("conexion_alfa_mi_perfil"))
+
+@app.route("/foto_reto/<int:any_id>")
+@login_required
+def foto_reto_alias(any_id):
+    # Tus tarjetas "Foto RETO 1/2/3" pueden apuntar aquí; redirigimos al flujo de foto
+    return redirect(url_for("reto_foto"))
+
+# archivos estáticos de fotos
+@app.route("/static/fotos_reto_foto/<path:filename>")
+def fotos_static(filename):
+    return send_from_directory(FOTOS_DIR, filename)
+
+# ─────────────────────────────────────────────────────────────
+# Main
+# ─────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    os.makedirs(FOTOS_DIR, exist_ok=True)
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=True)
