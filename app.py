@@ -261,11 +261,20 @@ def _retos_desde_db_o_fallback():
     ]
     return [type("Reto", (), x) for x in base]
 
-@app.route("/")
+from werkzeug.exceptions import HTTPException
+from flask import request
+
+@app.route("/", methods=["GET", "HEAD"])
 def home():
+    # Responder 200 al health check (HEAD) sin tocar rutas
+    if request.method == "HEAD":
+        return ("", 200)
+
     if "jugador_id" not in session:
-        return redirect(url_for("login"))
+        # Usa ruta literal para evitar fallo de resolución del endpoint
+        return redirect("/login")
     return redirect(url_for("index_page"))
+
 
 @app.route("/index")
 @login_required
