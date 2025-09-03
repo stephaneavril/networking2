@@ -1,134 +1,94 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <title>🎬 Adivina Quién – El Casting</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="utf-8">
+  <title>Adivina Quién</title>
   <style>
-    body{font-family:'Segoe UI',sans-serif;background:radial-gradient(circle at top center,#1a1d3d,#0c0e2c);color:#fff;text-align:center;padding:20px}
-    h1{font-size:2.5em;color:#ec1c24;text-shadow:2px 2px 5px #000;letter-spacing:2px;margin-bottom:10px}
-    .tarjeta{background:#1f2140;padding:30px;margin:30px auto;border-radius:15px;max-width:550px;box-shadow:0 0 20px rgba(236,28,36,.3);border:2px solid #ec1c24;transition:transform .3s}
-    .tarjeta:hover{transform:scale(1.02)}
-    p{font-size:1.1em;margin:8px 0}
-    select{padding:10px;font-size:16px;width:85%;margin-top:15px;border-radius:6px;border:none}
-    button{padding:12px 24px;margin-top:20px;font-size:16px;border:none;background:#ec1c24;color:#fff;border-radius:8px;cursor:pointer;box-shadow:0 0 10px rgba(236,28,36,.4)}
-    #resultado{margin-top:20px;font-weight:bold;font-size:1.2em}
-    #puntaje{margin-top:10px;color:lightgreen;font-weight:bold}
-    #timer{font-size:1.2em;margin-top:10px;color:#ffca28}
-    #advertencia{display:none;font-weight:bold;color:#ffeb3b;margin-top:10px}
+    body { font-family: system-ui, Segoe UI, Arial; margin:24px; background:#0f172a; color:#e5e7eb; }
+    .wrap { max-width:800px; margin:auto; }
+    .card { background:#111827; padding:24px; border-radius:14px; }
+    select, button { padding:10px 12px; border-radius:10px; border:1px solid #374151; background:#111827; color:#e5e7eb; }
+    button { background:#6366f1; border:none; cursor:pointer; }
+    .muted { color:#9ca3af; font-size:14px; }
   </style>
 </head>
 <body>
-<h1>🎬 Adivina Quién – El Casting</h1>
+<div class="wrap">
+  <h2>🕵️ Adivina Quién</h2>
+  <p class="muted">Hola <b>{{ yo }}</b>. Te mostraremos una pista de alguien; elige a quién crees que pertenece. ¡Suerte!</p>
 
-<div class="tarjeta">
-  <div id="timer">⏳ Tiempo restante: 15:00</div>
-  <div id="advertencia">⚠️ ¡Quedan solo 2 minutos! Adivina rápido…</div>
+  <div class="card" id="game">
+    <p id="pista">Cargando pista…</p>
+    <label>¿De quién es esta pista?</label>
+    <br><br>
+    <select id="selector"></select>
+    <br><br>
+    <button id="btn">Confirmar</button>
+    <p class="muted" id="estado"></p>
+  </div>
 
-  <div id="contenido"></div>
-
-  <select id="respuesta">
-    <option value="" disabled selected>🎭 ¿Quién crees que es?</option>
-  </select>
-
-  <br/>
-  <button onclick="verificar()">Responder</button>
-
-  <div id="resultado"></div>
-  <div id="puntaje">Puntaje: 0</div>
+  <p style="margin-top:16px"><a href="/logout" style="color:#93c5fd">Cerrar sesión</a></p>
 </div>
 
 <script>
-/* —— datos que inyecta Flask —— */
-const PARTICIPANTES = {{ participantes|tojson|safe }};
-const MATCH_NAME    = {{ match_name|tojson|safe }};   // puede ser null
+const participantes = {{ participantes_json|safe }};
+const nombres = participantes.map(p => p.nombre);
+const selector = document.getElementById('selector');
+const pistaEl = document.getElementById('pista');
+const estado = document.getElementById('estado');
+const btn = document.getElementById('btn');
 
-/* —— elegimos 15 —— */
-const participantesParaJugar = PARTICIPANTES.sort(()=>0.5-Math.random()).slice(0,15);
-let nombresRestantes = participantesParaJugar.map(p=>p.nombre_completo);
+let ronda = 0, aciertos = 0, actual = null;
+const RONDAS_MAX = Math.min(10, participantes.length); // hasta 10 o menos si hay pocos
 
-let indiceActual=0, actual=null, aciertos=0, puntaje=0, tiempoRestante=900, temporizador;
+function nuevaRonda() {
+  if (ronda >= RONDAS_MAX || participantes.length === 0) return finalizar();
+  estado.textContent = '';
+  ronda++;
 
-/* campos que existen en tu tabla */
-const pistas_keys = [
-  ["dato_curioso",      "🧠 Dato curioso"],
-  ["pelicula_favorita", "🎬 Película favorita"],
-  ["deporte_favorito",  "🏀 Deporte favorito"],
-  ["mejor_concierto",   "🎤 Concierto"],
-  ["pasion",            "🎶 Pasión"]
-];
+  // elige una persona al azar con al menos 1 pista
+  let cand = participantes.filter(p => p.pistas && p.pistas.length > 0);
+  if (cand.length === 0) { finalizar(); return; }
+  actual = cand[Math.floor(Math.random() * cand.length)];
 
-function mostrarFrase(){
-  if(indiceActual>=participantesParaJugar.length){finalizarJuego();return;}
+  // elige 1 pista al azar
+  const pista = actual.pistas[Math.floor(Math.random() * actual.pistas.length)];
+  pistaEl.textContent = `Pista ${ronda}/${RONDAS_MAX}: ${pista}`;
 
-  actual = participantesParaJugar[indiceActual];
-  const correcto = actual.nombre_completo;
+  // llena opciones (nombres mezclados)
+  const opciones = [...nombres];
+  opciones.sort(() => Math.random() - 0.5);
 
-  /* —— select —— */
-  const opcionesIncorrectas = nombresRestantes.filter(n=>n!==correcto)
-        .sort(()=>0.5-Math.random()).slice(0,14);
-  const opciones = [...opcionesIncorrectas,correcto].sort(()=>0.5-Math.random());
-
-  const sel=document.getElementById("respuesta");
-  sel.innerHTML='<option value="" disabled selected>🎭 ¿Quién crees que es?</option>';
-  opciones.forEach(n=>sel.insertAdjacentHTML("beforeend",`<option>${n}</option>`));
-
-  /* —— pistas —— */
-  const disponibles = pistas_keys.filter(([k])=>actual[k]);
-  const elegidas = (disponibles.length>3?disponibles.sort(()=>0.5-Math.random()).slice(0,3):disponibles)
-      .map(([k,lab])=>`<p><strong>${lab}:</strong> ${actual[k]}</p>`).join("");
-  document.getElementById("contenido").innerHTML = elegidas || "<p>🤷‍♂️ Sin pistas.</p>";
-  document.getElementById("resultado").textContent="";
-}
-
-function verificar(){
-  const sel=document.getElementById("respuesta"), val=sel.value;
-  if(!val) return;
-  if(val===actual.nombre_completo){
-    document.getElementById("resultado").textContent="✅ ¡Correcto!";
-    aciertos++; puntaje+=10;
-    nombresRestantes=nombresRestantes.filter(n=>n!==val);
-    indiceActual++;
-    document.getElementById("puntaje").textContent=`Puntaje: ${puntaje}`;
-    setTimeout(mostrarFrase,800);
-  }else{
-    document.getElementById("resultado").textContent="❌ Incorrecto, intenta de nuevo.";
-    puntaje-=10;
-    document.getElementById("puntaje").textContent=`Puntaje: ${puntaje}`;
-  }
-}
-
-function iniciarTemporizador(){
-  const t=document.getElementById("timer"), adv=document.getElementById("advertencia");
-  temporizador=setInterval(()=>{
-    tiempoRestante--;
-    const m=String(Math.floor(tiempoRestante/60)).padStart(2,"0");
-    const s=String(tiempoRestante%60).padStart(2,"0");
-    t.textContent=`⏳ Tiempo restante: ${m}:${s}`;
-    if(tiempoRestante===120) adv.style.display="block";
-    if(tiempoRestante<=0){clearInterval(temporizador);alert("⏰ ¡Se acabó el tiempo!");finalizarJuego();}
-  },1000);
-}
-
-function finalizarJuego(){
-  clearInterval(temporizador);
-  fetch("/adivina_finalizado",{
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({aciertos,puntaje})
-  })
-  .then(r=>r.json())
-  .then(d=>{
-    alert(d.message||d.error);
-    const nm=d.match||MATCH_NAME;
-    if(nm) alert(`🤝 ¡La IA cree que tu mejor match para platicar es ${nm}!`);
-    window.location.href="/ranking_adivina";
+  selector.innerHTML = '';
+  opciones.forEach(n => {
+    const opt = document.createElement('option');
+    opt.value = n; opt.textContent = n;
+    selector.appendChild(opt);
   });
 }
 
-/* —— arranque —— */
-mostrarFrase();
-iniciarTemporizador();
+btn.addEventListener('click', () => {
+  if (!actual) return;
+  const elegido = selector.value;
+  const ok = (elegido === actual.nombre);
+  if (ok) aciertos++;
+  estado.textContent = ok ? '✅ ¡Correcto!' : `❌ Era: ${actual.nombre}`;
+  setTimeout(nuevaRonda, 800);
+});
+
+function finalizar() {
+  btn.disabled = true;
+  pistaEl.textContent = `🎉 Juego terminado. Aciertos: ${aciertos} / ${RONDAS_MAX}`;
+  estado.textContent = 'Guardando resultado...';
+  fetch('/adivina_finalizado', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ aciertos, rondas: RONDAS_MAX })
+  }).then(()=> estado.textContent = 'Resultado guardado.')
+    .catch(()=> estado.textContent = 'No se pudo guardar (pero terminaste el juego).');
+}
+
+nuevaRonda();
 </script>
 </body>
 </html>

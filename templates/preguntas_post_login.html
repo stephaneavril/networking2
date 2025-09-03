@@ -1,107 +1,50 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <title>Conócete Mejor</title>
+  <meta charset="utf-8">
+  <title>Preguntas post login</title>
   <style>
-    body {
-      background: url('/static/images/Astrazeneca.png') no-repeat center center fixed;
-      background-size: cover;
-      font-family: 'Segoe UI', sans-serif;
-      color: white;
-      padding: 30px;
-    }
-    .form-box {
-      background-color: rgba(0, 0, 0, 0.8);
-      max-width: 700px;
-      margin: auto;
-      padding: 30px;
-      border-radius: 10px;
-    }
-    h1 {
-      color: #ec1c24;
-      text-align: center;
-    }
-    label {
-      display: block;
-      margin: 15px 0 5px;
-      font-weight: bold;
-    }
-    input[type="text"] {
-      width: 100%;
-      padding: 8px;
-      border-radius: 6px;
-      border: none;
-      margin-bottom: 10px;
-    }
-    button {
-      background: #ec1c24;
-      color: white;
-      padding: 12px 20px;
-      border: none;
-      border-radius: 6px;
-      font-size: 1em;
-      cursor: pointer;
-      display: block;
-      margin: auto;
-      margin-top: 20px;
-    }
-    a {
-      color: #ffb;
-      text-decoration: underline;
-    }
+    body { font-family: system-ui, Segoe UI, Arial; margin:24px; background:#0f172a; color:#e5e7eb; }
+    .card { background:#111827; padding:24px; border-radius:14px; max-width:800px; margin:auto; }
+    textarea, button { width:100%; padding:10px 12px; border-radius:10px; border:1px solid #374151; background:#111827; color:#e5e7eb; }
+    button { background:#10b981; border:none; cursor:pointer; }
+    label { display:block; margin-top:12px; font-size:14px; color:#9ca3af; }
   </style>
 </head>
 <body>
+  <div class="card">
+    <h2>🧩 Cuéntanos de ti</h2>
+    <form method="post">
+      <label>¿Cuál es tu mayor pasión? (r2)</label>
+      <textarea name="r2" rows="2"></textarea>
 
-  <div class="form-box">
-    {% if ya_respondio %}
-      <h1>✅ Ya respondiste estas preguntas</h1>
-      <p>Puedes ver tu perfil <a href="/conexion_alfa_mi_perfil">aquí</a>.</p>
-    {% else %}
-      <h1>📝 Cuéntanos sobre ti</h1>
+      <label>Dato curioso sobre ti (r3)</label>
+      <textarea name="r3" rows="2"></textarea>
 
-<form method="post">
-  <!-- r2 – Pasión -->
-  <label for="r2">🎶 ¿Qué pasión te mueve fuera del trabajo?</label>
-  <input id="r2" name="r2" required>
+      <label>Película favorita (r4)</label>
+      <textarea name="r4" rows="2"></textarea>
 
-  <!-- r3 – Dato curioso -->
-  <label for="r3">🧠 Cuéntanos un dato curioso sobre ti</label>
-  <textarea id="r3" name="r3" rows="2" required></textarea>
+      <label>Deporte favorito (r6)</label>
+      <textarea name="r6" rows="2"></textarea>
 
-  <!-- r4 – Película favorita -->
-  <label for="r4">🎬 ¿Película favorita?</label>
-  <input id="r4" name="r4" required>
+      <label>Prenda imprescindible (r8)</label>
+      <textarea name="r8" rows="2"></textarea>
 
-  <!-- r6 – Deporte favorito -->
-  <label for="r6">🏀 ¿Deporte favorito?</label>
-  <input id="r6" name="r6" required>
+      <label>Mejor concierto (r9)</label>
+      <textarea name="r9" rows="2"></textarea>
 
-  <!-- r8 – Prenda imprescindible -->
-  <label for="r8">👕 Prenda de vestir sin la que no puedes vivir</label>
-  <input id="r8" name="r8" required>
+      <label>Libro/obra de arte favorita (r10)</label>
+      <textarea name="r10" rows="2"></textarea>
 
-  <!-- r9 – Mejor concierto -->
-  <label for="r9">🎤 ¿Cuál ha sido el mejor concierto que has vivido?</label>
-  <input id="r9" name="r9" required>
+      <label>¿Tienes mascota? (r12)</label>
+      <textarea name="r12" rows="2"></textarea>
 
-  <!-- r10 – Libro / arte favorito -->
-  <label for="r10">📖 Libro favorito <small>(o expresión artística favorita)</small></label>
-  <input id="r10" name="r10" required>
+      <label>¿Tienes hijos? (r13)</label>
+      <textarea name="r13" rows="2"></textarea>
 
-  <!-- r12 – Mascota -->
-  <label for="r12">🐾 ¿Tienes mascota? Si la respuesta es sí, ¿cuál(es)?</label>
-  <input id="r12" name="r12">
-
-  <!-- r13 – Hijos -->
-  <label for="r13">👶 ¿Tienes hijos? Si la respuesta es sí, ¿cuántos / edades?</label>
-  <input id="r13" name="r13">
-
-  <button type="submit">Guardar</button>
-</form>
-    {% endif %}
+      <br><br>
+      <button>Guardar y jugar</button>
+    </form>
   </div>
-
 </body>
 </html>

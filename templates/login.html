@@ -1,30 +1,28 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <title>Ingresar</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta charset="utf-8">
+  <title>Login</title>
   <style>
-    body{font-family:Segoe UI,system-ui;background:#0f1220;color:#eee;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
-    .card{background:#1b1f36;border:1px solid #2a2f4a;border-radius:12px;padding:24px;max-width:360px;width:90%;box-shadow:0 10px 30px rgba(0,0,0,.3)}
-    h1{margin:0 0 10px;font-size:22px}
-    label{display:block;margin-top:12px;font-size:14px;opacity:.9}
-    input{width:100%;padding:10px 12px;margin-top:6px;border-radius:8px;border:1px solid #394067;background:#101428;color:#fff}
-    button{margin-top:16px;width:100%;padding:12px;border:none;border-radius:10px;background:#ec1c24;color:#fff;font-weight:600;cursor:pointer}
-    .hint{font-size:12px;opacity:.7;margin-top:8px}
+    body { font-family: system-ui, Segoe UI, Arial; display:grid; place-items:center; height:100vh; margin:0; background:#0f172a; color:#e5e7eb;}
+    .card { background:#111827; padding:24px; border-radius:14px; width:320px; box-shadow: 0 10px 30px rgba(0,0,0,.3); }
+    input,button { width:100%; padding:10px 12px; border-radius:10px; border:1px solid #374151; background:#111827; color:#e5e7eb; }
+    button { background:#2563eb; border:none; cursor:pointer; }
+    label { font-size:14px; color:#9ca3af; }
   </style>
 </head>
 <body>
-  <form class="card" method="POST" action="/login">
-    <h1>👋 Bienvenido</h1>
-    <label>Nombre
-      <input type="text" name="nombre" required>
-    </label>
-    <label>Correo
-      <input type="email" name="correo" required>
-    </label>
-    <button>Entrar</button>
-    <div class="hint">Al entrar podrás ir directo al panel de retos.</div>
-  </form>
+  <div class="card">
+    <h2>👋 Bienvenido</h2>
+    <form method="post">
+      <label>Nombre</label>
+      <input name="nombre" placeholder="Tu nombre" required>
+      <br><br>
+      <label>Correo</label>
+      <input name="correo" type="email" placeholder="tucorreo@dominio.com" required>
+      <br><br>
+      <button>Entrar</button>
+    </form>
+  </div>
 </body>
 </html>
