@@ -342,7 +342,7 @@ BEGIN
     FROM pg_constraint c
     JOIN pg_class t ON t.oid = c.conrelid
     WHERE t.relname='jugadores' AND c.contype='u'
-          AND pg_get_constraintdef(c.oid) LIKE '%(correo)%'
+          AND pg_get_constraintdef(c.oid) LIKE '%%(correo)%%'
   ) THEN
     EXECUTE 'ALTER TABLE jugadores ADD CONSTRAINT jugadores_correo_uidx UNIQUE (correo)';
   END IF;
