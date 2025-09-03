@@ -279,31 +279,6 @@ def index_page():
 # ─────────────────────────────────────────────────────────────
 # Login / Logout
 # ─────────────────────────────────────────────────────────────
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if request.method == "GET":
-        return render_template("login.html")
-
-    nombre = (request.form.get("nombre") or "").strip()
-    correo = (request.form.get("correo") or "").strip().lower()
-
-    if not nombre or not correo or "@" not in correo:
-        flash("Nombre y correo válidos son requeridos.")
-        return redirect(url_for("login"))
-
-    jugador = upsert_jugador(nombre, correo)
-    session["jugador_id"] = jugador["id"]
-    session["nombre"] = jugador["nombre"]
-    session["correo"] = jugador["correo"]
-    session["jugador"] = jugador["nombre"]
-
-    # ✅ si NO ha llenado preguntas → llévalo a preguntas
-    if not get_respuestas(jugador["id"]):
-        return redirect(url_for("preguntas_post_login"))
-
-    # ✅ si SÍ ha llenado → al index
-    return redirect(url_for("index_page"))
-
 def normalize_jugadores_schema():
     sql = r"""
 DO $do$
@@ -336,20 +311,43 @@ BEGIN
     END IF;
   END IF;
 
-  -- UNIQUE sobre (correo) solo si no existe ya
+  -- ✅ Asegurar UNIQUE sobre (correo) sin duplicar ni chocar nombres
   IF NOT EXISTS (
     SELECT 1
     FROM pg_constraint c
     JOIN pg_class t ON t.oid = c.conrelid
     WHERE t.relname='jugadores' AND c.contype='u'
-          AND pg_get_constraintdef(c.oid) LIKE '%%(correo)%%'
+          AND strpos(pg_get_constraintdef(c.oid), '(correo)') > 0
   ) THEN
-    EXECUTE 'ALTER TABLE jugadores ADD CONSTRAINT jugadores_correo_uidx UNIQUE (correo)';
+    -- ¿Hay ya un índice único sobre (correo)?
+    IF EXISTS (
+      SELECT 1
+      FROM pg_indexes i
+      WHERE i.schemaname='public' AND i.tablename='jugadores'
+        AND strpos(i.indexdef, 'CREATE UNIQUE INDEX') > 0
+        AND strpos(i.indexdef, '(correo)') > 0
+    ) THEN
+      -- Si el índice se llama jugadores_correo_uidx, reutilízalo como constraint con OTRO nombre
+      IF EXISTS (
+        SELECT 1 FROM pg_indexes 
+        WHERE schemaname='public' AND tablename='jugadores' AND indexname='jugadores_correo_uidx'
+      ) THEN
+        EXECUTE 'ALTER TABLE jugadores ADD CONSTRAINT jugadores_correo_key UNIQUE USING INDEX jugadores_correo_uidx';
+      ELSE
+        -- Usa el primer índice único que aplique (Postgres no deja parametrizar el nombre aquí fácilmente;
+        -- asumiendo el más común)
+        EXECUTE 'ALTER TABLE jugadores ADD CONSTRAINT jugadores_correo_key UNIQUE (correo)';
+      END IF;
+    ELSE
+      -- No hay índice: crea el constraint (Postgres generará su propio índice)
+      EXECUTE 'ALTER TABLE jugadores ADD CONSTRAINT jugadores_correo_key UNIQUE (correo)';
+    END IF;
   END IF;
 END
 $do$;
 """
     execute(sql)
+
 
 
 # Llama:
