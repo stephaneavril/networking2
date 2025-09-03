@@ -295,13 +295,16 @@ def login():
     session["jugador_id"] = jugador["id"]
     session["nombre"] = jugador["nombre"]
     session["correo"] = jugador["correo"]
-    session["jugador"] = jugador["nombre"]  # para index.html
+    session["jugador"] = jugador["nombre"]
 
-    # ya no bloqueamos la entrada al index si falta el perfil
+    # ✅ Decisión de navegación según respuestas
     if not get_respuestas(jugador["id"]):
-        flash("Completa tu perfil cuando puedas para mejorar los retos.")
+        # Aún no responde: llevar al formulario post-login
+        return redirect(url_for("preguntas_post_login"))
+    else:
+        # Ya respondió: ir al índice normalmente
+        return redirect(url_for("index_page"))
 
-    return redirect(url_for("index_page"))
 
 @app.route("/logout")
 def logout():
