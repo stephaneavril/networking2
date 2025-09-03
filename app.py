@@ -297,13 +297,55 @@ def login():
     session["correo"] = jugador["correo"]
     session["jugador"] = jugador["nombre"]
 
-    # ✅ Decisión de navegación según respuestas
+    # ✅ si NO ha llenado preguntas → llévalo a preguntas
     if not get_respuestas(jugador["id"]):
-        # Aún no responde: llevar al formulario post-login
         return redirect(url_for("preguntas_post_login"))
-    else:
-        # Ya respondió: ir al índice normalmente
-        return redirect(url_for("index_page"))
+
+    # ✅ si SÍ ha llenado → al index
+    return redirect(url_for("index_page"))
+
+def normalize_jugadores_schema():
+    sql = """
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name='jugadores' AND column_name='nombre'
+      ) THEN
+        ALTER TABLE jugadores ADD COLUMN nombre TEXT;
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='jugadores' AND column_name='nombre_jugador'
+        ) THEN
+          EXECUTE 'UPDATE jugadores SET nombre = nombre_jugador WHERE nombre IS NULL';
+        END IF;
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_name='jugadores' AND column_name='correo'
+      ) THEN
+        ALTER TABLE jugadores ADD COLUMN correo TEXT;
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns 
+          WHERE table_name='jugadores' AND column_name='email'
+        ) THEN
+          EXECUTE ''UPDATE jugadores SET correo = email WHERE correo IS NULL'';
+        END IF;
+      END IF;
+
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_indexes WHERE schemaname=''public'' AND indexname=''jugadores_correo_uidx''
+      ) THEN
+        EXECUTE ''CREATE UNIQUE INDEX jugadores_correo_uidx ON jugadores (correo)'';
+      END IF;
+    END$$;
+    """
+    execute(sql)
+
+# Llama:
+ensure_schema()
+normalize_jugadores_schema()
 
 
 @app.route("/logout")
