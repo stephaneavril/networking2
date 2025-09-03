@@ -305,46 +305,54 @@ def login():
     return redirect(url_for("index_page"))
 
 def normalize_jugadores_schema():
-    sql = """
-    DO $$
-    BEGIN
-      IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name='jugadores' AND column_name='nombre'
-      ) THEN
-        ALTER TABLE jugadores ADD COLUMN nombre TEXT;
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns 
-          WHERE table_name='jugadores' AND column_name='nombre_jugador'
-        ) THEN
-          EXECUTE 'UPDATE jugadores SET nombre = nombre_jugador WHERE nombre IS NULL';
-        END IF;
-      END IF;
+    sql = r"""
+DO $do$
+BEGIN
+  -- columna nombre
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_name='jugadores' AND column_name='nombre'
+  ) THEN
+    ALTER TABLE jugadores ADD COLUMN nombre TEXT;
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns 
+      WHERE table_name='jugadores' AND column_name='nombre_jugador'
+    ) THEN
+      EXECUTE 'UPDATE jugadores SET nombre = nombre_jugador WHERE nombre IS NULL';
+    END IF;
+  END IF;
 
-      IF NOT EXISTS (
-        SELECT 1 FROM information_schema.columns 
-        WHERE table_name='jugadores' AND column_name='correo'
-      ) THEN
-        ALTER TABLE jugadores ADD COLUMN correo TEXT;
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns 
-          WHERE table_name='jugadores' AND column_name='email'
-        ) THEN
-          EXECUTE ''UPDATE jugadores SET correo = email WHERE correo IS NULL'';
-        END IF;
-      END IF;
+  -- columna correo
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_name='jugadores' AND column_name='correo'
+  ) THEN
+    ALTER TABLE jugadores ADD COLUMN correo TEXT;
+    IF EXISTS (
+      SELECT 1 FROM information_schema.columns 
+      WHERE table_name='jugadores' AND column_name='email'
+    ) THEN
+      EXECUTE 'UPDATE jugadores SET correo = email WHERE correo IS NULL';
+    END IF;
+  END IF;
 
-      IF NOT EXISTS (
-        SELECT 1 FROM pg_indexes WHERE schemaname=''public'' AND indexname=''jugadores_correo_uidx''
-      ) THEN
-        EXECUTE ''CREATE UNIQUE INDEX jugadores_correo_uidx ON jugadores (correo)'';
-      END IF;
-    END$$;
-    """
+  -- UNIQUE sobre (correo) solo si no existe ya
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint c
+    JOIN pg_class t ON t.oid = c.conrelid
+    WHERE t.relname='jugadores' AND c.contype='u'
+          AND pg_get_constraintdef(c.oid) LIKE '%(correo)%'
+  ) THEN
+    EXECUTE 'ALTER TABLE jugadores ADD CONSTRAINT jugadores_correo_uidx UNIQUE (correo)';
+  END IF;
+END
+$do$;
+"""
     execute(sql)
 
+
 # Llama:
-ensure_schema()
 normalize_jugadores_schema()
 
 
@@ -470,7 +478,7 @@ def reto_foto():
         mine = query("SELECT * FROM reto_foto WHERE jugador_id=%s", (session["jugador_id"],))
         ya_subio = bool(mine)
         # Reusa tu plantilla de estilo si quieres; o reemplázala por una propia
-        return render_template("preguntas_post_login.html", ya_respondio=True)
+        return render_template("reto_foto.html", ya_subio=ya_subio) 
     # POST: subir foto
     if "foto" not in request.files:
         flash("Sube una imagen.")
