@@ -1,177 +1,60 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <title>NETWORKING TEAMS CHALLENGE</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Inicio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
   <style>
-    /* ─── Paleta de colores AstraZeneca ─── */
-    :root {
-      --az-purple:  #8A0051;   /* principal AstraZeneca */
-      --az-yellow:  #EFAB00;   /* acento AstraZeneca */
-
-      /* Neutros reutilizables */
-      --az-grey-dark:   #1c1c1c;
-      --az-grey-medium: #292929;
-      --az-grey-light:  #e0e0e0;
-
-      --badge-green: #4caf50;  /* se mantiene para badges de puntuación */
-    }
-
-    /* ─── Layout General ─── */
-    body {
-      font-family: 'Share Tech Mono', monospace;
-      background-color: var(--az-grey-dark);
-      color: var(--az-grey-light);
-      margin: 0;
-      padding: 0;
-      /* Imagen de fondo genérica, sustituir por la oficial si la hay */
-      background-image: url('/static/images/az_background.jpg');
-      background-size: cover;
-      background-position: center;
-      background-attachment: fixed;
-    }
-
-    /* ─── Encabezado ─── */
-    header {
-      background: rgba(255,255,255,0.95);   /* fondo casi blanco para resaltar logo */
-      padding: 20px;
-      text-align: center;
-      font-size: 1.6em;
-      font-weight: bold;
-      border-bottom: 4px solid var(--az-purple);
-      color: var(--az-purple);              /* texto púrpura AZ */
-    }
-
-    /* ─── Contenedor principal ─── */
-    .container {
-      max-width: 700px;
-      margin: 30px auto;
-      padding: 20px;
-      background: rgba(28, 28, 28, 0.9);
-      border-radius: 12px;
-      box-shadow: 0 0 15px rgba(0,0,0,0.6);
-    }
-
-    /* ─── Cuadrícula de retos ─── */
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 15px;
-    }
-
-    /* ─── Tarjetas ─── */
-    .card {
-      background: var(--az-grey-medium);
-      border-radius: 12px;
-      padding: 20px;
-      text-align: center;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-      transition: 0.3s;
-      cursor: pointer;
-      border: 1px solid #444;
-    }
-    .card:hover { background: #333; }
-    .card.desactivado {
-      background: #2c2c2c;
-      opacity: 0.4;
-      cursor: not-allowed;
-    }
-    .card h3 {
-      margin: 10px 0 0;
-      font-size: 1em;
-      color: var(--az-grey-light);
-    }
-
-    /* ─── Badges ─── */
-    .badge {
-      background: var(--az-yellow);
-      color: var(--az-grey-dark);
-      padding: 4px 8px;
-      border-radius: 8px;
-      font-size: 0.75em;
-      display: inline-block;
-      font-weight: bold;
-    }
-
-    /* ─── Pie de página ─── */
-    footer {
-      text-align: center;
-      padding: 20px;
-      font-size: 0.9em;
-      background-color: #151515;
-      color: #aaa;
-    }
-    footer a {
-      color: var(--az-purple);
-      text-decoration: none;
-    }
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial;background:#0b0b0f;color:#eaeaf2;margin:0;padding:24px}
+    .card{max-width:720px;margin:0 auto;background:#13131a;border:1px solid #242433;border-radius:16px;padding:24px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    .btn{appearance:none;border:1px solid #3a3a4d;background:#1e1e2a;color:#fff;padding:12px 16px;border-radius:12px;text-decoration:none;display:inline-block}
+    .btn:hover{background:#2a2a3a}
+    .btn.primary{background:#3a6df0;border-color:#3a6df0}
+    .btn.primary:hover{background:#2f59c6}
+    .muted{color:#a9a9ba}
+    .ok{color:#4ade80}
+    .warn{color:#fbbf24}
+    .bad{color:#f87171}
+    hr{border:none;border-top:1px solid #242433;margin:20px 0}
   </style>
 </head>
 <body>
+  <div class="card">
+    <h1>Hola, {{ nombre or "Jugador/a" }} 👋</h1>
 
-<header>
-  <img src="{{ url_for('static', filename='images/Astrazeneca.png') }}" alt="AstraZeneca" style="max-height: 60px; vertical-align: middle;">
-  <span style="margin-left: 10px;">ASTRAZENECA CHALLENGE</span>
-</header>
-
-<div class="container">
-  {# ───── Mensajes flash ───── #}
-  {% with mensajes = get_flashed_messages() %}
-    {% if mensajes %}
-      <div style="background: #2a2a2a; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
-        {% for msg in mensajes %}
-          <p style="color: lightgreen; margin: 0;">{{ msg }}</p>
-        {% endfor %}
+    {% if not ya_respondio %}
+      <p class="muted">Para poder jugar, primero completa tus preguntas.</p>
+      <div class="row">
+        <a class="btn primary" href="{{ url_for('preguntas_post_login') }}">Responder preguntas</a>
       </div>
-    {% endif %}
-  {% endwith %}
-
-  <p style="text-align: center; font-size: 1.1em;">
-    ¡Hola {{ session['jugador'] }}! Selecciona un reto para comenzar:
-  </p>
-
-  <div class="grid">
-    {# ───── Mostrar TODOS los retos activos ───── #}
-    {% for reto in retos %}
-      {% if reto.activo %}
-        {% set reto_url = (
-          '/reto_mi6_v1' if reto.nombre == 'MI6 v1'
-          else '/reto_mi6_v2' if reto.nombre == 'MI6 v2'
-          else '/reto_mi6_v3' if reto.nombre == 'MI6 v3'
-          else '/adivina' if reto.nombre == 'Adivina Quién'
-          else '/reto_grupal' if reto.nombre == 'Reto en Equipos'
-          else '/reto_foto' if reto.nombre == 'Reto Foto'
-          else '/ver_fotos_reto_foto' if reto.nombre|lower == 'ver fotos y votar'
-          else '/ranking_fotos' if reto.nombre == 'Ranking Fotos'
-          else '/conexion_alfa' if reto.nombre == 'Conexión Alfa'
-          else '/foto_reto/1' if reto.nombre == 'Foto RETO 1'
-          else '/foto_reto/2' if reto.nombre == 'Foto RETO 2'
-          else '/foto_reto/3' if reto.nombre == 'Foto RETO 3'
-          else '#'
-        ) %}
-        <div class="card" onclick="location.href='{{ reto_url }}'">
-          <div class="badge">
-            {# Iconos o puntaje #}
-            {% if reto.nombre in ['MI6 v1','MI6 v2','MI6 v3'] %}
-              {% if reto.nombre == 'MI6 v1' %}📸{% elif reto.nombre == 'MI6 v2' %}🤝{% else %}🗣️{% endif %}
-            {% elif reto.nombre in ['Ver Fotos y Votar', 'Ver Fotos de Equipos'] %}🖼️
-            {% elif reto.nombre == 'Ranking Fotos' %}🏆
-            {% elif reto.nombre in ['Foto RETO 1','Foto RETO 2','Foto RETO 3'] %}📷
-            {% else %}+{{ reto.puntos }}
-            {% endif %}
-          </div>
-          <h3>{{ reto.nombre }}</h3>
+    {% else %}
+      {% if adivina_activo %}
+        <p class="ok">✅ Adivina Quién está activo.</p>
+        <div class="row">
+          <a class="btn primary" href="{{ url_for('adivina') }}">Jugar Adivina Quién</a>
+        </div>
+      {% else %}
+        <p class="warn">⏳ El administrador aún no ha activado Adivina Quién.</p>
+        <div class="row">
+          <a class="btn" href="{{ url_for('preguntas_post_login') }}">Editar mis respuestas</a>
         </div>
       {% endif %}
-    {% endfor %}
+    {% endif %}
+
+    <hr>
+    <div class="row">
+      <a class="btn" href="{{ url_for('logout') }}">Cerrar sesión</a>
+
+      {% if session.get('is_admin') %}
+        <a class="btn" href="{{ url_for('admin_panel') }}">Admin Panel</a>
+      {% else %}
+        <!-- Puedes entrar como admin usando tu token:
+             /admin?token=TU_TOKEN  y luego ir a /admin_panel -->
+        <a class="btn" href="{{ url_for('admin_login') }}">Entrar como Admin</a>
+      {% endif %}
+    </div>
   </div>
-
-  
-<footer>
-  &copy; 2025 TEAMS | <a href="https://teams.com.mx">teams.com.mx</a>
-</footer>
-
 </body>
 </html>

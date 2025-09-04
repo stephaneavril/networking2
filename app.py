@@ -166,6 +166,8 @@ $do$;
 
 ensure_schema()
 normalize_schema()
+# añade esta línea dentro de normalize_schema() o después de ensure_schema():
+execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS rondas INTEGER NOT NULL DEFAULT 0;")
 
 # ─────────────────────────────────────────────────────────────
 # Utils
@@ -211,12 +213,21 @@ def set_reto_activo(nombre: str, activo: bool):
 def home():
     if request.method == "HEAD":
         return ("", 200)
-    if "jugador_id" not in session:
-        return redirect(url_for("login"))
-    # si ya llenó preguntas, envía al juego; si no, al formulario
-    if get_respuestas(session["jugador_id"]):
-        return redirect(url_for("adivina"))
-    return redirect(url_for("preguntas_post_login"))
+    return redirect(url_for("index_page"))
+
+@app.route("/index")
+@app.route("/index.html")
+@login_required
+def index_page():
+    me = session["jugador_id"]
+    ya_respondio = bool(get_respuestas(me))
+    return render_template(
+        "index.html",
+        nombre=session.get("nombre", ""),
+        ya_respondio=ya_respondio,
+        adivina_activo=reto_activo("Adivina Quién"),
+    )
+
 
 @app.route("/login", methods=["GET", "POST"], endpoint="login")
 def login_route():
@@ -309,16 +320,15 @@ def _participantes_para_juego(mi_id: int):
 @app.route("/adivina")
 @login_required
 def adivina():
-    # Solo cuando el reto esté activo
     if not reto_activo("Adivina Quién"):
         flash("Adivina Quién aún no está activo. Espera a que el administrador lo habilite.")
-        return redirect(url_for("preguntas_post_login"))
-
+        return redirect(url_for("index_page"))
     me = session["jugador_id"]
     participantes = _participantes_para_juego(me)
     return render_template("adivina.html",
                            yo=session.get("nombre",""),
                            participantes_json=json.dumps(participantes, ensure_ascii=False))
+
 
 @app.route("/adivina_finalizado", methods=["POST"])
 @login_required
