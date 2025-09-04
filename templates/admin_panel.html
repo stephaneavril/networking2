@@ -155,6 +155,23 @@
     </tr>
   {% endfor %}
 </table>
+<section style="margin:16px 0; padding:12px; border:1px solid #334155; border-radius:10px;">
+  <h3>🎛️ Adivina Quién</h3>
+  <p>Total jugadores: <b>{{ total_jugadores }}</b> · Con respuestas: <b>{{ total_respuestas }}</b> · Faltan: <b>{{ faltan }}</b></p>
+  <p>Estado: {% if adivina_activo %}<span style="color:#22c55e">Activo</span>{% else %}<span style="color:#ef4444">Inactivo</span>{% endif %}</p>
+
+  <form method="post" action="{{ url_for('admin_activar_adivina') }}" style="display:inline">
+    <button {% if faltan>0 %}title="Aún faltan respuestas"{% endif %}>Activar (cuando todos listos)</button>
+  </form>
+
+  <form method="post" action="{{ url_for('admin_forzar_adivina') }}" style="display:inline; margin-left:6px">
+    <button>Forzar activación</button>
+  </form>
+
+  <form method="post" action="{{ url_for('admin_desactivar_adivina') }}" style="display:inline; margin-left:6px">
+    <button>Desactivar</button>
+  </form>
+</section>
 
 
 <!-- Generar contenido Adivina -->

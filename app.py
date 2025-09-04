@@ -151,6 +151,25 @@ def upsert_jugador(nombre: str, correo: str):
 def get_respuestas(jugador_id: int):
     rows = query("SELECT * FROM formulario_respuestas WHERE jugador_id=%s", (jugador_id,))
     return rows[0] if rows else None
+def readiness_counts():
+    tj = query("SELECT COUNT(*) AS c FROM jugadores")[0]["c"]
+    tr = query("SELECT COUNT(*) AS c FROM formulario_respuestas")[0]["c"]
+    return int(tj), int(tr), int(max(tj - tr, 0))
+
+def reto_activo(nombre: str) -> bool:
+    try:
+        rows = query("SELECT activo FROM retos WHERE nombre=%s", (nombre,))
+        return bool(rows and rows[0]["activo"])
+    except Exception:
+        # si no hay tabla retos o columna, asume activo
+        return True
+
+def set_reto_activo(nombre: str, activo: bool):
+    try:
+        execute("UPDATE retos SET activo=%s WHERE nombre=%s", (activo, nombre))
+    except Exception:
+        # ignora si no existe la tabla; tu index usa fallback
+        pass
 
 # ─────────────────────────────────────────────────────────────
 # Rutas
@@ -195,9 +214,11 @@ def logout():
 @login_required
 def preguntas_post_login():
     jugador_id = session["jugador_id"]
-    ya = bool(get_respuestas(jugador_id))
+    ya_respondio = bool(get_respuestas(jugador_id))
     if request.method == "GET":
-        return render_template("preguntas_post_login.html", ya_respondio=ya)
+        prev = get_respuestas(jugador_id) or {}
+        return render_template("preguntas_post_login.html", ya_respondio=ya_respondio, respuestas=prev)
+
     campos = ["r2","r3","r4","r6","r8","r9","r10","r12","r13"]
     valores = [request.form.get(k,"").strip() for k in campos]
     if ya:
@@ -231,11 +252,17 @@ def _participantes_para_juego(mi_id: int):
 @app.route("/adivina")
 @login_required
 def adivina():
+    # 🔒 Solo cuando el reto esté activo
+    if not reto_activo("Adivina Quién"):
+        flash("Adivina Quién aún no está activo. Espera a que el administrador lo habilite.")
+        return redirect(url_for("index_page"))
+
     me = session["jugador_id"]
     participantes = _participantes_para_juego(me)
     return render_template("adivina.html",
                            yo=session.get("nombre",""),
                            participantes_json=json.dumps(participantes, ensure_ascii=False))
+
 
 @app.route("/adivina_finalizado", methods=["POST"])
 @login_required
@@ -246,3 +273,85 @@ def adivina_finalizado():
     execute("INSERT INTO adivina_scores (jugador_id, aciertos, rondas) VALUES (%s,%s,%s)",
             (session["jugador_id"], aciertos, rondas))
     return jsonify({"ok": True})
+
+@app.route("/admin_panel", methods=["GET"])
+@admin_required
+def admin_panel():
+    mensajes = []
+
+    participantes = query("""
+      SELECT j.id, j.nombre, j.correo, r.r2, r.r3, r.r4, r.r6, r.r8, r.r9, r.r10, r.r12, r.r13
+      FROM jugadores j LEFT JOIN formulario_respuestas r ON r.jugador_id=j.id
+      ORDER BY j.nombre
+    """)
+
+    resultados = query("""
+      SELECT j.nombre, MAX(s.puntaje) AS puntaje, MAX(s.aciertos) AS aciertos
+      FROM adivina_scores s JOIN jugadores j ON j.id=s.jugador_id
+      GROUP BY j.nombre
+      ORDER BY puntaje DESC, aciertos DESC, j.nombre ASC
+    """)
+
+    matches = query("""
+      SELECT j1.nombre AS nombre_1, j2.nombre AS nombre_2, cm.score
+      FROM conexion_matches cm
+      JOIN jugadores j1 ON j1.id=cm.jugador_1
+      JOIN jugadores j2 ON j2.id=cm.jugador_2
+      WHERE cm.jugador_1 < cm.jugador_2
+      ORDER BY cm.score DESC
+    """)
+
+    try:
+        retos = query("SELECT id,nombre,activo,puntos FROM retos ORDER BY id ASC")
+        retos = [type("Reto", (), r) for r in retos]
+    except Exception:
+        retos = [type("Reto", (), x) for x in [
+            {"id":1,"nombre":"Adivina Quién","activo":True,"puntos":0},
+            {"id":2,"nombre":"Reto Foto","activo":True,"puntos":0},
+            {"id":3,"nombre":"Conexión Alfa","activo":True,"puntos":0},
+        ]]
+
+    total_jugadores, total_respuestas, faltan = readiness_counts()
+    adivina_activo = reto_activo("Adivina Quién")
+
+    return render_template(
+        "admin_panel.html",
+        mensajes=mensajes,
+        retos=retos,
+        resultados=resultados,
+        participantes=participantes,
+        equipos={},
+        matches_conexion=matches,
+        total_jugadores=total_jugadores,
+        total_respuestas=total_respuestas,
+        faltan=faltan,
+        adivina_activo=adivina_activo
+    )
+
+@app.route("/admin/activar_adivina", methods=["POST"])
+@admin_required
+def admin_activar_adivina():
+    tj, tr, faltan = readiness_counts()
+    if tj < 2:
+        flash("Se requieren al menos 2 jugadores para activar Adivina Quién.")
+        return redirect(url_for("admin_panel"))
+    if faltan > 0:
+        flash(f"Aún faltan {faltan} jugadores por llenar preguntas.")
+        return redirect(url_for("admin_panel"))
+    set_reto_activo("Adivina Quién", True)
+    flash("✅ Adivina Quién activado. ¡A jugar!")
+    return redirect(url_for("admin_panel"))
+
+@app.route("/admin/forzar_adivina", methods=["POST"])
+@admin_required
+def admin_forzar_adivina():
+    set_reto_activo("Adivina Quién", True)
+    flash("⚠️ Adivina Quién fue activado manualmente (aunque falten respuestas).")
+    return redirect(url_for("admin_panel"))
+
+@app.route("/admin/desactivar_adivina", methods=["POST"])
+@admin_required
+def admin_desactivar_adivina():
+    set_reto_activo("Adivina Quién", False)
+    flash("Adivina Quién desactivado.")
+    return redirect(url_for("admin_panel"))

@@ -2,49 +2,131 @@
 <html lang="es">
 <head>
   <meta charset="utf-8">
-  <title>Preguntas post login</title>
+  <title>Preguntas</title>
   <style>
-    body { font-family: system-ui, Segoe UI, Arial; margin:24px; background:#0f172a; color:#e5e7eb; }
-    .card { background:#111827; padding:24px; border-radius:14px; max-width:800px; margin:auto; }
-    textarea, button { width:100%; padding:10px 12px; border-radius:10px; border:1px solid #374151; background:#111827; color:#e5e7eb; }
-    button { background:#10b981; border:none; cursor:pointer; }
-    label { display:block; margin-top:12px; font-size:14px; color:#9ca3af; }
+    body { font-family: system-ui, Segoe UI, Arial; margin:0; background:#0f172a; color:#e5e7eb; }
+    .wrap { max-width:800px; margin:40px auto; padding:0 16px; }
+    .card { background:#111827; padding:24px; border-radius:14px; box-shadow: 0 10px 30px rgba(0,0,0,.3); }
+    textarea, button { width:100%; padding:10px 12px; border-radius:10px; border:1px solid #374151; background:#0b1220; color:#e5e7eb; }
+    button { border:none; cursor:pointer; }
+    .row { display:flex; gap:10px; margin-top:14px; }
+    .primary { background:#10b981; }
+    .ghost { background:#374151; }
+    .muted { color:#9ca3af; font-size:14px; margin-top:8px; }
+    .progress { height:6px; background:#1f2937; border-radius:999px; overflow:hidden; margin:12px 0 16px; }
+    .bar { height:6px; background:#10b981; width:0%; }
   </style>
 </head>
 <body>
+<div class="wrap">
   <div class="card">
     <h2>🧩 Cuéntanos de ti</h2>
-    <form method="post">
-      <label>¿Cuál es tu mayor pasión? (r2)</label>
-      <textarea name="r2" rows="2"></textarea>
+    <div class="progress"><div class="bar" id="bar"></div></div>
+    <p class="muted" id="contador"></p>
 
-      <label>Dato curioso sobre ti (r3)</label>
-      <textarea name="r3" rows="2"></textarea>
+    <!-- Form real: se enviarán inputs hidden con los names reales -->
+    <form id="form" method="post"></form>
 
-      <label>Película favorita (r4)</label>
-      <textarea name="r4" rows="2"></textarea>
+    <!-- Tarjeta única de pregunta -->
+    <div id="step">
+      <label id="label"></label>
+      <textarea id="answer" rows="3" placeholder="Escribe tu respuesta..."></textarea>
+      <div class="row">
+        <button id="back" type="button" class="ghost">← Anterior</button>
+        <button id="next" type="button" class="primary">Siguiente →</button>
+        <button id="finish" type="button" class="primary" style="display:none">Guardar</button>
+      </div>
+    </div>
 
-      <label>Deporte favorito (r6)</label>
-      <textarea name="r6" rows="2"></textarea>
-
-      <label>Prenda imprescindible (r8)</label>
-      <textarea name="r8" rows="2"></textarea>
-
-      <label>Mejor concierto (r9)</label>
-      <textarea name="r9" rows="2"></textarea>
-
-      <label>Libro/obra de arte favorita (r10)</label>
-      <textarea name="r10" rows="2"></textarea>
-
-      <label>¿Tienes mascota? (r12)</label>
-      <textarea name="r12" rows="2"></textarea>
-
-      <label>¿Tienes hijos? (r13)</label>
-      <textarea name="r13" rows="2"></textarea>
-
-      <br><br>
-      <button>Guardar y jugar</button>
-    </form>
+    <p class="muted">Puedes regresar y editar antes de guardar. Máximo 10 preguntas.</p>
   </div>
+</div>
+
+<script>
+/*
+  Definición de preguntas (máx 10). 
+  Los 'name' deben coincidir con columnas del servidor.
+  Si ya traes respuestas previas desde el servidor, pásalas en
+  una variable 'respuestas' (ver abajo).
+*/
+const QUESTIONS = [
+  {name:'r2',  label:'¿Cuál es tu mayor pasión?'},
+  {name:'r3',  label:'Dato curioso sobre ti'},
+  {name:'r4',  label:'Película favorita'},
+  {name:'r6',  label:'Deporte favorito'},
+  {name:'r8',  label:'Prenda imprescindible'},
+  {name:'r9',  label:'Mejor concierto'},
+  {name:'r10', label:'Libro/obra de arte favorita'},
+  {name:'r12', label:'¿Tienes mascota?'},
+  {name:'r13', label:'¿Tienes hijos?'},
+];
+// aplica máximo 10 por si en el futuro agregas más
+const STEPS = QUESTIONS.slice(0, 10);
+
+// Respuestas previas desde el servidor (inyectadas por Jinja, si existen)
+const respuestas = {{ (respuestas or {}) | tojson | safe }};
+
+const form = document.getElementById('form');
+const label = document.getElementById('label');
+const answer = document.getElementById('answer');
+const backBtn = document.getElementById('back');
+const nextBtn = document.getElementById('next');
+const finishBtn = document.getElementById('finish');
+const contador = document.getElementById('contador');
+const bar = document.getElementById('bar');
+
+let idx = 0;
+const data = {};
+
+// precarga con lo que venga del server
+for (const q of STEPS) {
+  if (respuestas[q.name]) data[q.name] = respuestas[q.name];
+}
+
+function render() {
+  const total = STEPS.length;
+  contador.textContent = `Pregunta ${idx+1} de ${total}`;
+  bar.style.width = `${Math.round(((idx)/total)*100)}%`;
+
+  const q = STEPS[idx];
+  label.textContent = q.label;
+  answer.value = data[q.name] || "";
+
+  backBtn.style.display = (idx === 0) ? 'none' : 'inline-block';
+  nextBtn.style.display = (idx < total - 1) ? 'inline-block' : 'none';
+  finishBtn.style.display = (idx === total - 1) ? 'inline-block' : 'none';
+}
+
+function persistCurrent() {
+  const q = STEPS[idx];
+  data[q.name] = answer.value.trim();
+}
+
+backBtn.addEventListener('click', () => {
+  persistCurrent();
+  if (idx > 0) { idx--; render(); }
+});
+
+nextBtn.addEventListener('click', () => {
+  persistCurrent();
+  if (idx < STEPS.length - 1) { idx++; render(); }
+});
+
+finishBtn.addEventListener('click', () => {
+  persistCurrent();
+  // limpia form y crea inputs hidden con los names reales esperados por Flask
+  form.innerHTML = '';
+  for (const q of STEPS) {
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = q.name;
+    input.value = data[q.name] || '';
+    form.appendChild(input);
+  }
+  form.submit();
+});
+
+render();
+</script>
 </body>
 </html>
