@@ -46,13 +46,8 @@
     <hr>
     <div class="row">
       <a class="btn" href="{{ url_for('logout') }}">Cerrar sesión</a>
-
-      {% if session.get('is_admin') %}
+      {% if show_admin %}
         <a class="btn" href="{{ url_for('admin_panel') }}">Admin Panel</a>
-      {% else %}
-        <!-- Puedes entrar como admin usando tu token:
-             /admin?token=TU_TOKEN  y luego ir a /admin_panel -->
-        <a class="btn" href="{{ url_for('admin_login') }}">Entrar como Admin</a>
       {% endif %}
     </div>
   </div>

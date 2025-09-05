@@ -1,6 +1,7 @@
 # app.py — Mini TEAMS: Login → Preguntas → Adivina Quién
 import os
 import json
+import random
 from functools import wraps
 from typing import Tuple
 
@@ -19,7 +20,7 @@ app.secret_key = os.getenv("FLASK_SECRET", "change-me")
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "letmein")
 
 # ─────────────────────────────────────────────────────────────
-# Decoradores (deben declararse antes de usarse en @app.route)
+# Decoradores
 # ─────────────────────────────────────────────────────────────
 def login_required(f):
     @wraps(f)
@@ -56,11 +57,12 @@ def _dsn_with_ssl(url: str) -> str:
     return f"{url}{sep}sslmode=require"
 
 def db_connect():
-    return psycopg2.connect(_dsn_with_ssl(DATABASE_URL),
-                            cursor_factory=psycopg2.extras.RealDictCursor)
+    return psycopg2.connect(
+        _dsn_with_ssl(DATABASE_URL),
+        cursor_factory=psycopg2.extras.RealDictCursor
+    )
 
 def execute(sql: str, params: Tuple = ()):
-    # reintenta 1 vez si la conexión se cayó
     for _ in (1, 2):
         conn = None
         try:
@@ -93,7 +95,7 @@ def query(sql: str, params: Tuple = ()):
     return []
 
 # ─────────────────────────────────────────────────────────────
-# Esquema mínimo + normalización suave
+# Esquema + normalización
 # ─────────────────────────────────────────────────────────────
 DDL = """
 CREATE TABLE IF NOT EXISTS jugadores (
@@ -117,15 +119,19 @@ CREATE TABLE IF NOT EXISTS formulario_respuestas (
   created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
+-- una sola marca de finalización por jugador
 CREATE TABLE IF NOT EXISTS adivina_scores (
-  id SERIAL PRIMARY KEY,
-  jugador_id INTEGER NOT NULL REFERENCES jugadores(id) ON DELETE CASCADE,
-  aciertos INTEGER NOT NULL,
-  rondas INTEGER NOT NULL,
+  jugador_id INTEGER PRIMARY KEY REFERENCES jugadores(id) ON DELETE CASCADE,
+  aciertos INTEGER NOT NULL DEFAULT 0,
+  rondas   INTEGER NOT NULL DEFAULT 0,
+  fallos   INTEGER NOT NULL DEFAULT 0,
+  puntos_base  INTEGER NOT NULL DEFAULT 0,
+  puntos_bonus INTEGER NOT NULL DEFAULT 0,
+  puntos_total INTEGER NOT NULL DEFAULT 0,
   created_at TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
--- Catálogo de retos para activar/desactivar desde admin
+-- control de activación de retos
 CREATE TABLE IF NOT EXISTS retos (
   id SERIAL PRIMARY KEY,
   nombre TEXT UNIQUE NOT NULL,
@@ -136,15 +142,19 @@ CREATE TABLE IF NOT EXISTS retos (
 def ensure_schema():
     for stmt in [s.strip() for s in DDL.split(";") if s.strip()]:
         execute(stmt + ";")
-    # Seed del reto “Adivina Quién” (inactivo hasta que admin lo active)
-    execute("""
-        INSERT INTO retos (nombre, activo)
-        VALUES ('Adivina Quién', FALSE)
-        ON CONFLICT (nombre) DO NOTHING;
-    """)
+    # seeds
+    execute("INSERT INTO retos (nombre,activo) VALUES ('Adivina Quién', FALSE) ON CONFLICT (nombre) DO NOTHING;")
+    for nombre in ('MI6 v1', 'MI6 v2', 'MI6 v3'):
+        execute("INSERT INTO retos (nombre,activo) VALUES (%s, FALSE) ON CONFLICT (nombre) DO NOTHING;", (nombre,))
 
 def normalize_schema():
-    # Ajustes suaves si venías de otro esquema
+    # adivina_scores columnas por si vienes de otra versión
+    execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS rondas INTEGER NOT NULL DEFAULT 0;")
+    execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS fallos INTEGER NOT NULL DEFAULT 0;")
+    execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS puntos_base  INTEGER NOT NULL DEFAULT 0;")
+    execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS puntos_bonus INTEGER NOT NULL DEFAULT 0;")
+    execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS puntos_total INTEGER NOT NULL DEFAULT 0;")
+    # jugadores columnas defensivas
     sql = r"""
 DO $do$
 BEGIN
@@ -166,8 +176,6 @@ $do$;
 
 ensure_schema()
 normalize_schema()
-# añade esta línea dentro de normalize_schema() o después de ensure_schema():
-execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS rondas INTEGER NOT NULL DEFAULT 0;")
 
 # ─────────────────────────────────────────────────────────────
 # Utils
@@ -192,12 +200,8 @@ def readiness_counts():
     return int(tj), int(tr), int(max(tj - tr, 0))
 
 def reto_activo(nombre: str) -> bool:
-    try:
-        rows = query("SELECT activo FROM retos WHERE nombre=%s", (nombre,))
-        # si no existe el registro, lo consideramos inactivo
-        return bool(rows and rows[0]["activo"])
-    except Exception:
-        return False
+    rows = query("SELECT activo FROM retos WHERE nombre=%s", (nombre,))
+    return bool(rows and rows[0]["activo"])
 
 def set_reto_activo(nombre: str, activo: bool):
     execute("""
@@ -226,8 +230,8 @@ def index_page():
         nombre=session.get("nombre", ""),
         ya_respondio=ya_respondio,
         adivina_activo=reto_activo("Adivina Quién"),
+        show_admin=session.get("is_admin", False)  # <- para ocultar botón
     )
-
 
 @app.route("/login", methods=["GET", "POST"], endpoint="login")
 def login_route():
@@ -251,7 +255,7 @@ def logout():
     session.clear()
     return redirect(url_for("login"))
 
-# --- Admin login minimal ---
+# --- Admin login aislado (no ligado a jugador) ---
 @app.route("/admin", methods=["GET", "POST"])
 def admin_login():
     if request.method == "POST":
@@ -272,6 +276,7 @@ def admin_login():
     </body></html>
     """)
 
+# --- Preguntas (una tarjeta a la vez lo maneja la plantilla/JS) ---
 @app.route("/preguntas_post_login", methods=["GET", "POST"])
 @login_required
 def preguntas_post_login():
@@ -280,7 +285,6 @@ def preguntas_post_login():
 
     if request.method == "GET":
         prev = get_respuestas(jugador_id) or {}
-        # La plantilla muestra UNA tarjeta a la vez (JS) y máx 10 preguntas
         return render_template("preguntas_post_login.html",
                                ya_respondio=ya_respondio, respuestas=prev)
 
@@ -303,9 +307,12 @@ def preguntas_post_login():
     flash("¡Gracias! Tus respuestas fueron guardadas.")
     return redirect(url_for("adivina"))
 
+# --- Util para juego: 5 categorías y 3 pistas random ---
+CAMPOS_JUEGO = ["r2","r3","r4","r6","r9"]  # 5 preguntas/respuestas usadas en el juego
+
 def _participantes_para_juego(mi_id: int):
     rows = query("""
-      SELECT j.id, j.nombre, r.r2, r.r3, r.r4, r.r6, r.r8, r.r9, r.r10, r.r12, r.r13
+      SELECT j.id, j.nombre, r.r2, r.r3, r.r4, r.r6, r.r9, r.r8, r.r10, r.r12, r.r13
       FROM jugadores j
       JOIN formulario_respuestas r ON r.jugador_id=j.id
       WHERE j.id <> %s
@@ -313,7 +320,13 @@ def _participantes_para_juego(mi_id: int):
     """, (mi_id,))
     out = []
     for x in rows:
-        pistas = [p for p in [x["r2"],x["r3"],x["r4"],x["r6"],x["r8"],x["r9"],x["r10"],x["r12"],x["r13"]] if p]
+        # Solo consideramos las 5 categorías del juego
+        pool = [x[k] for k in CAMPOS_JUEGO if x.get(k)]
+        if not pool:
+            # fallback: usar cualquiera disponible si las de juego están vacías
+            pool = [p for p in [x.get("r2"),x.get("r3"),x.get("r4"),x.get("r6"),x.get("r8"),
+                                x.get("r9"),x.get("r10"),x.get("r12"),x.get("r13")] if p]
+        pistas = random.sample(pool, k=min(3, len(pool)))  # ← 3 pistas aleatorias
         out.append({"id": x["id"], "nombre": x["nombre"], "pistas": pistas})
     return out
 
@@ -329,58 +342,94 @@ def adivina():
                            yo=session.get("nombre",""),
                            participantes_json=json.dumps(participantes, ensure_ascii=False))
 
-
+# Puntaje: +10 acierto, −10 fallo, bonus por llegada: 1º +50, 2º +40, 3º +30, 4º +40, resto +10
 @app.route("/adivina_finalizado", methods=["POST"])
 @login_required
 def adivina_finalizado():
     data = request.get_json(force=True) or {}
     aciertos = int(data.get("aciertos", 0))
-    rondas = int(data.get("rondas", 0))
-    execute("INSERT INTO adivina_scores (jugador_id, aciertos, rondas) VALUES (%s,%s,%s)",
-            (session["jugador_id"], aciertos, rondas))
-    return jsonify({"ok": True})
+    fallos = int(data.get("fallos", 0))
+    rondas = int(data.get("rondas", aciertos + fallos))
+
+    puntos_base = aciertos * 10 - fallos * 10
+
+    # posición de llegada (antes de insertar el actual)
+    pos = query("SELECT COUNT(*) AS c FROM adivina_scores")[0]["c"] + 1
+    if   pos == 1: puntos_bonus = 50
+    elif pos == 2: puntos_bonus = 40
+    elif pos == 3: puntos_bonus = 30
+    elif pos == 4: puntos_bonus = 40  # pedido explícito
+    else:          puntos_bonus = 10
+
+    puntos_total = puntos_base + puntos_bonus
+
+    # upsert de la marca de finalización (clave primaria jugador_id)
+    execute("""
+        INSERT INTO adivina_scores (jugador_id, aciertos, rondas, fallos, puntos_base, puntos_bonus, puntos_total)
+        VALUES (%s,%s,%s,%s,%s,%s,%s)
+        ON CONFLICT (jugador_id) DO UPDATE
+        SET aciertos=EXCLUDED.aciertos,
+            rondas=EXCLUDED.rondas,
+            fallos=EXCLUDED.fallos,
+            puntos_base=EXCLUDED.puntos_base,
+            puntos_bonus=EXCLUDED.puntos_bonus,
+            puntos_total=EXCLUDED.puntos_total
+    """, (session["jugador_id"], aciertos, rondas, fallos, puntos_base, puntos_bonus, puntos_total))
+
+    return jsonify({"ok": True, "pos": pos, "puntos_base": puntos_base, "puntos_bonus": puntos_bonus, "puntos_total": puntos_total})
 
 # ─────────────────────────────────────────────────────────────
 # Admin Panel + activación de reto
 # ─────────────────────────────────────────────────────────────
-@app.route("/admin_panel", methods=["GET"])
+@app.route("/admin_panel", methods=["GET", "POST"])
 @admin_required
 def admin_panel():
+    # POST: toggles desde tu HTML
+    if request.method == "POST":
+        reto_id = request.form.get("reto_id")
+        activo  = request.form.get("activo")
+        activar_solo = request.form.get("activar_solo")
+        if reto_id is not None and activo is not None:
+            execute("UPDATE retos SET activo=%s WHERE id=%s", (bool(int(activo)), int(reto_id)))
+            flash("Estado del reto actualizado.")
+            return redirect(url_for("admin_panel"))
+        if activar_solo is not None:
+            rid = int(activar_solo)
+            execute("UPDATE retos SET activo=FALSE")
+            execute("UPDATE retos SET activo=TRUE WHERE id=%s", (rid,))
+            flash("Se activó sólo el reto seleccionado.")
+            return redirect(url_for("admin_panel"))
+
     participantes = query("""
-      SELECT j.id, j.nombre, j.correo, r.r2, r.r3, r.r4, r.r6, r.r8, r.r9, r.r10, r.r12, r.r13
+      SELECT j.id, j.nombre, j.correo,
+             r.r2, r.r3, r.r4, r.r6, r.r8, r.r9, r.r10, r.r12, r.r13
       FROM jugadores j LEFT JOIN formulario_respuestas r ON r.jugador_id=j.id
       ORDER BY j.nombre
     """)
 
     resultados = query("""
-      SELECT j.nombre,
-             MAX(s.aciertos) AS aciertos,
-             MIN(s.rondas)   AS mejores_rondas
+      SELECT j.nombre AS nombre_jugador,
+             s.aciertos,
+             s.puntos_total AS puntos_extra
       FROM adivina_scores s
       JOIN jugadores j ON j.id = s.jugador_id
-      GROUP BY j.nombre
-      ORDER BY aciertos DESC, mejores_rondas ASC, j.nombre ASC
+      ORDER BY s.puntos_total DESC, s.created_at ASC
     """)
 
-    try:
-        retos = query("SELECT id, nombre, activo FROM retos ORDER BY id ASC")
-        retos = [type("Reto", (), r) for r in retos]
-    except Exception:
-        retos = [type("Reto", (), {"id":1,"nombre":"Adivina Quién","activo":False})]
+    retos = [type("Reto", (), r) for r in query("SELECT id, nombre, activo FROM retos ORDER BY id ASC")]
 
-    total_jugadores, total_respuestas, faltan = readiness_counts()
+    tj, tr, faltan = readiness_counts()
     adivina_activo = reto_activo("Adivina Quién")
 
     return render_template(
         "admin_panel.html",
-        mensajes=[],
         retos=retos,
         resultados=resultados,
         participantes=participantes,
         equipos={},
-        matches_conexion=[],  # fuera de alcance en esta mini app
-        total_jugadores=total_jugadores,
-        total_respuestas=total_respuestas,
+        matches_conexion=[],
+        total_jugadores=tj,
+        total_respuestas=tr,
         faltan=faltan,
         adivina_activo=adivina_activo
     )
@@ -411,6 +460,39 @@ def admin_forzar_adivina():
 def admin_desactivar_adivina():
     set_reto_activo("Adivina Quién", False)
     flash("Adivina Quién desactivado.")
+    return redirect(url_for("admin_panel"))
+
+# Aux del panel que tu HTML llama
+@app.route("/eliminar_todos_los_jugadores", methods=["POST"])
+@admin_required
+def eliminar_todos_los_jugadores():
+    execute("DELETE FROM adivina_scores")
+    execute("DELETE FROM formulario_respuestas")
+    execute("DELETE FROM jugadores")
+    flash("Se eliminaron todos los jugadores y sus datos.")
+    return redirect(url_for("admin_panel"))
+
+@app.route("/reset_reto_equipo_foto", methods=["POST"])
+@admin_required
+def reset_reto_equipo_foto():
+    flash("Reto de equipo (fotos) no está habilitado en esta versión.")
+    return redirect(url_for("admin_panel"))
+
+@app.route("/ver_fotos_equipo")
+@admin_required
+def ver_fotos_equipo():
+    return "<h3 style='font-family:Segoe UI;color:#fff'>Módulo de fotos por equipo no habilitado en esta versión.</h3>"
+
+@app.route("/generar_contenido_adivina", methods=["POST"])
+@admin_required
+def generar_contenido_adivina():
+    flash("Adivina Quién usa las respuestas actuales (no requiere pre-carga).")
+    return redirect(url_for("admin_panel"))
+
+@app.route("/generar_matches_conexion_alfa", methods=["POST"])
+@admin_required
+def generar_matches_conexion_alfa():
+    flash("Conexión Alfa no está habilitado en esta versión mínima.")
     return redirect(url_for("admin_panel"))
 
 # ─────────────────────────────────────────────────────────────
