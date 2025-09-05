@@ -62,7 +62,7 @@
     // Muestra TODAS las pistas (ya vienen hasta 3 del backend)
     objetivo.pistas.forEach(p => {
       const li = document.createElement('li');
-      li.textContent = p;
+      li.textContent = `${p.label}: ${p.text}`;
       pistasEl.appendChild(li);
     });
 

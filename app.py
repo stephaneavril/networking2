@@ -310,25 +310,41 @@ def preguntas_post_login():
 # --- Util para juego: 5 categorías y 3 pistas random ---
 CAMPOS_JUEGO = ["r2","r3","r4","r6","r9"]  # 5 preguntas/respuestas usadas en el juego
 
+import random  # arriba del archivo si no lo tienes
+
 def _participantes_para_juego(mi_id: int):
     rows = query("""
-      SELECT j.id, j.nombre, r.r2, r.r3, r.r4, r.r6, r.r9, r.r8, r.r10, r.r12, r.r13
+      SELECT j.id, j.nombre, r.r2, r.r3, r.r4, r.r6, r.r8, r.r9, r.r10, r.r12, r.r13
       FROM jugadores j
       JOIN formulario_respuestas r ON r.jugador_id=j.id
       WHERE j.id <> %s
       ORDER BY j.nombre
     """, (mi_id,))
+
+    campos = [
+        ("🎶 Pasión", "r2"),
+        ("🧠 Dato curioso", "r3"),
+        ("🎬 Película favorita", "r4"),
+        ("🏀 Deporte favorito", "r6"),
+        ("👕 Prenda imprescindible", "r8"),
+        ("🎤 Mejor concierto", "r9"),
+        ("📖 Libro/arte favorito", "r10"),
+        ("🐾 Mascota", "r12"),
+        ("👶 Hijos", "r13"),
+    ]
+
     out = []
     for x in rows:
-        # Solo consideramos las 5 categorías del juego
-        pool = [x[k] for k in CAMPOS_JUEGO if x.get(k)]
-        if not pool:
-            # fallback: usar cualquiera disponible si las de juego están vacías
-            pool = [p for p in [x.get("r2"),x.get("r3"),x.get("r4"),x.get("r6"),x.get("r8"),
-                                x.get("r9"),x.get("r10"),x.get("r12"),x.get("r13")] if p]
-        pistas = random.sample(pool, k=min(3, len(pool)))  # ← 3 pistas aleatorias
+        disponibles = []
+        for label, key in campos:
+            val = x.get(key)
+            if val:
+                disponibles.append({"label": label, "text": val})
+        random.shuffle(disponibles)
+        pistas = disponibles[:3] if len(disponibles) >= 3 else disponibles
         out.append({"id": x["id"], "nombre": x["nombre"], "pistas": pistas})
     return out
+
 
 @app.route("/adivina")
 @login_required
