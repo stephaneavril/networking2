@@ -183,7 +183,7 @@ $do$;
 """
     execute(sql)
 
-    # ========= 🔧 Conexión Alfa: asegurar tabla + índice único =========
+    # ========= Conexión Alfa: respuestas =========
     execute("""
         CREATE TABLE IF NOT EXISTS conexion_alfa_respuestas (
             jugador_id INTEGER,
@@ -216,18 +216,76 @@ DO $$BEGIN
 END$$;
 """)
 
+    # ========= Conexión Alfa: matches (renombra/crea columnas si faltan) =========
     execute("""
         CREATE TABLE IF NOT EXISTS conexion_alfa_matches (
             id SERIAL PRIMARY KEY,
-            jugador_1_id INTEGER NOT NULL,
-            jugador_2_id INTEGER NOT NULL,
-            score FLOAT NOT NULL,
+            jugador_1_id INTEGER,
+            jugador_2_id INTEGER,
+            score FLOAT,
             razon_match TEXT,
             evidencia TEXT,
             feedback SMALLINT,
             created_at TIMESTAMP DEFAULT NOW()
         );
     """)
+
+    execute(r"""
+DO $$BEGIN
+  -- jugador_1_id
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_matches' AND column_name='jugador_1_id'
+  ) THEN
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_matches' AND column_name='j1_id') THEN
+      ALTER TABLE conexion_alfa_matches RENAME COLUMN j1_id TO jugador_1_id;
+    ELSIF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_matches' AND column_name='jugador1_id') THEN
+      ALTER TABLE conexion_alfa_matches RENAME COLUMN jugador1_id TO jugador_1_id;
+    ELSE
+      ALTER TABLE conexion_alfa_matches ADD COLUMN jugador_1_id INTEGER;
+    END IF;
+  END IF;
+
+  -- jugador_2_id
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_matches' AND column_name='jugador_2_id'
+  ) THEN
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_matches' AND column_name='j2_id') THEN
+      ALTER TABLE conexion_alfa_matches RENAME COLUMN j2_id TO jugador_2_id;
+    ELSIF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_matches' AND column_name='jugador2_id') THEN
+      ALTER TABLE conexion_alfa_matches RENAME COLUMN jugador2_id TO jugador_2_id;
+    ELSE
+      ALTER TABLE conexion_alfa_matches ADD COLUMN jugador_2_id INTEGER;
+    END IF;
+  END IF;
+
+  -- score / razon_match / evidencia / feedback
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_matches' AND column_name='score'
+  ) THEN
+    ALTER TABLE conexion_alfa_matches ADD COLUMN score FLOAT NOT NULL DEFAULT 0;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_matches' AND column_name='razon_match'
+  ) THEN
+    ALTER TABLE conexion_alfa_matches ADD COLUMN razon_match TEXT;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_matches' AND column_name='evidencia'
+  ) THEN
+    ALTER TABLE conexion_alfa_matches ADD COLUMN evidencia TEXT;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_matches' AND column_name='feedback'
+  ) THEN
+    ALTER TABLE conexion_alfa_matches ADD COLUMN feedback SMALLINT;
+  END IF;
+END$$;
+""")
+
+    # Índices (ya existen las columnas)
     execute("CREATE INDEX IF NOT EXISTS idx_ca_j1 ON conexion_alfa_matches(jugador_1_id)")
     execute("CREATE INDEX IF NOT EXISTS idx_ca_j2 ON conexion_alfa_matches(jugador_2_id)")
 
