@@ -312,14 +312,18 @@ CAMPOS_JUEGO = ["r2","r3","r4","r6","r9"]  # 5 preguntas/respuestas usadas en el
 
 import random  # arriba del archivo si no lo tienes
 
-def _participantes_para_juego(mi_id: int):
+def _participantes_para_juego(mi_id: int, n: int = 5):
     rows = query("""
       SELECT j.id, j.nombre, r.r2, r.r3, r.r4, r.r6, r.r8, r.r9, r.r10, r.r12, r.r13
       FROM jugadores j
       JOIN formulario_respuestas r ON r.jugador_id=j.id
       WHERE j.id <> %s
-      ORDER BY j.nombre
     """, (mi_id,))
+
+    # baraja y recorta a 5 (si hay menos, usa los que haya)
+    random.shuffle(rows)
+    if len(rows) > n:
+        rows = rows[:n]
 
     campos = [
         ("🎶 Pasión", "r2"),
@@ -328,9 +332,9 @@ def _participantes_para_juego(mi_id: int):
         ("🏀 Deporte favorito", "r6"),
         ("👕 Prenda imprescindible", "r8"),
         ("🎤 Mejor concierto", "r9"),
-        ("📖 Libro/arte favorito", "r10"),
+        ("📚 Libro/Arte favorito", "r10"),
         ("🐾 Mascota", "r12"),
-        ("👶 Hijos", "r13"),
+        ("👪 Hijos", "r13"),
     ]
 
     out = []
@@ -353,10 +357,17 @@ def adivina():
         flash("Adivina Quién aún no está activo. Espera a que el administrador lo habilite.")
         return redirect(url_for("index_page"))
     me = session["jugador_id"]
-    participantes = _participantes_para_juego(me)
-    return render_template("adivina.html",
-                           yo=session.get("nombre",""),
-                           participantes_json=json.dumps(participantes, ensure_ascii=False))
+
+    participantes = session.get("adivina_set")
+    if not participantes:
+        participantes = _participantes_para_juego(me, n=5)
+        session["adivina_set"] = participantes  # congelar la selección de esta partida
+
+    return render_template(
+        "adivina.html",
+        yo=session.get("nombre",""),
+        participantes_json=json.dumps(participantes, ensure_ascii=False)
+    )
 
 # Puntaje: +10 acierto, −10 fallo, bonus por llegada: 1º +50, 2º +40, 3º +30, 4º +40, resto +10
 @app.route("/adivina_finalizado", methods=["POST"])
@@ -392,6 +403,8 @@ def adivina_finalizado():
             puntos_total=EXCLUDED.puntos_total
     """, (session["jugador_id"], aciertos, rondas, fallos, puntos_base, puntos_bonus, puntos_total))
 
+# limpiar el set congelado para permitir nueva partida con nuevo random
+    session.pop("adivina_set", None)
     return jsonify({"ok": True, "pos": pos, "puntos_base": puntos_base, "puntos_bonus": puntos_bonus, "puntos_total": puntos_total})
 
 # ─────────────────────────────────────────────────────────────

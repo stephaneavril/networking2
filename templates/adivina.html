@@ -35,6 +35,8 @@
 
 <script>
   const participantes = {{ participantes_json|safe }}; // [{id,nombre,pistas:[...]}]
+  // Opcional: por si algún día cambias algo en backend
+  if (participantes.length > 5) participantes.length = 5;
   // barajamos orden de personas a adivinar
   for (let i = participantes.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
