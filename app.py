@@ -101,7 +101,50 @@ def query(sql: str, params: Tuple = ()):
     return []
 
 # ─────────────────────────────────────────────────────────────
-# Esquema + normalización (pegar esto justo después de DDL)
+# DDL base (tablas principales)
+# ─────────────────────────────────────────────────────────────
+DDL = """
+CREATE TABLE IF NOT EXISTS jugadores (
+  id SERIAL PRIMARY KEY,
+  nombre TEXT NOT NULL,
+  correo TEXT NOT NULL UNIQUE,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS formulario_respuestas (
+  jugador_id INTEGER PRIMARY KEY REFERENCES jugadores(id) ON DELETE CASCADE,
+  r2  TEXT,  -- pasión
+  r3  TEXT,  -- dato curioso
+  r4  TEXT,  -- película favorita
+  r6  TEXT,  -- deporte favorito
+  r8  TEXT,  -- prenda imprescindible
+  r9  TEXT,  -- mejor concierto
+  r10 TEXT,  -- libro/arte favorito
+  r12 TEXT,  -- mascota
+  r13 TEXT,  -- hijos
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS adivina_scores (
+  jugador_id INTEGER PRIMARY KEY REFERENCES jugadores(id) ON DELETE CASCADE,
+  aciertos INTEGER NOT NULL DEFAULT 0,
+  rondas   INTEGER NOT NULL DEFAULT 0,
+  fallos   INTEGER NOT NULL DEFAULT 0,
+  puntos_base  INTEGER NOT NULL DEFAULT 0,
+  puntos_bonus INTEGER NOT NULL DEFAULT 0,
+  puntos_total INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS retos (
+  id SERIAL PRIMARY KEY,
+  nombre TEXT UNIQUE NOT NULL,
+  activo BOOLEAN NOT NULL DEFAULT FALSE
+);
+"""
+
+# ─────────────────────────────────────────────────────────────
+# Esquema + normalización
 # ─────────────────────────────────────────────────────────────
 def ensure_schema():
     for stmt in [s.strip() for s in DDL.split(";") if s.strip()]:
@@ -140,8 +183,7 @@ $do$;
 """
     execute(sql)
 
-    # ========= 🔧 FIX Conexión Alfa =========
-    # 1) Asegura que exista la tabla (con jugador_id)
+    # ========= 🔧 Conexión Alfa: asegurar tabla + índice único =========
     execute("""
         CREATE TABLE IF NOT EXISTS conexion_alfa_respuestas (
             jugador_id INTEGER,
@@ -149,12 +191,8 @@ $do$;
             created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW()
         );
     """)
-
-    # 2) Si antes existía una columna 'id', migra a 'jugador_id' y añade índice único
     execute(r"""
-DO $$
-BEGIN
-  -- agrega jugador_id si faltara
+DO $$BEGIN
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_name='conexion_alfa_respuestas' AND column_name='jugador_id'
@@ -162,27 +200,22 @@ BEGIN
     ALTER TABLE conexion_alfa_respuestas ADD COLUMN jugador_id INTEGER;
   END IF;
 
-  -- migra desde 'id' si existía
   IF EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_name='conexion_alfa_respuestas' AND column_name='id'
   ) THEN
-    UPDATE conexion_alfa_respuestas
-       SET jugador_id = id
-     WHERE jugador_id IS NULL;
+    UPDATE conexion_alfa_respuestas SET jugador_id = id WHERE jugador_id IS NULL;
   END IF;
 
-  -- índice único para ON CONFLICT (jugador_id)
   IF NOT EXISTS (
     SELECT 1 FROM pg_indexes
     WHERE schemaname='public' AND indexname='ux_ca_respuestas_jugador_id'
   ) THEN
     CREATE UNIQUE INDEX ux_ca_respuestas_jugador_id ON conexion_alfa_respuestas(jugador_id);
   END IF;
-END $$;
+END$$;
 """)
 
-    # 3) Asegura la tabla de matches e índices
     execute("""
         CREATE TABLE IF NOT EXISTS conexion_alfa_matches (
             id SERIAL PRIMARY KEY,
@@ -198,10 +231,9 @@ END $$;
     execute("CREATE INDEX IF NOT EXISTS idx_ca_j1 ON conexion_alfa_matches(jugador_1_id)")
     execute("CREATE INDEX IF NOT EXISTS idx_ca_j2 ON conexion_alfa_matches(jugador_2_id)")
 
-# 👇 Llama aquí, inmediatamente DESPUÉS de definir las funciones
+# Llamadas de inicialización (ya existe DDL arriba)
 ensure_schema()
 normalize_schema()
-
 
 # ─────────────────────────────────────────────────────────────
 # Utils
@@ -253,13 +285,9 @@ def index_page():
     ya_respondio = bool(get_respuestas(me))
 
     # asegura tablas de conexión alfa y calcula flags
-    try:
-        ensure_tablas_conexion_alfa()  # si ya lo tienes definido más abajo, no dupliques la función
-    except NameError:
-        pass  # si no está definida todavía, no pasa nada
-
+    _ensure_tablas_conexion_alfa()
     alfa_ya = bool(query("SELECT 1 FROM conexion_alfa_respuestas WHERE jugador_id=%s", (me,)))
-    
+
     return render_template(
         "index.html",
         nombre=session.get("nombre", ""),
@@ -613,8 +641,7 @@ def _get_personas_con_perfil():
         JOIN jugadores j ON j.id=r.jugador_id
     """)}
     extra = {r["jugador_id"]: r for r in query("""
-        SELECT *
-        FROM conexion_alfa_respuestas
+        SELECT * FROM conexion_alfa_respuestas
     """)}
     personas = []
     for pid in base.keys() | extra.keys():
