@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Mi Match — Conexión Alfa</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body{font-family:Segoe UI,system-ui;background:#0f1115;color:#e8e8e8;margin:0}
+    .wrap{max-width:980px;margin:40px auto;padding:24px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+    .card{background:#141821;border:1px solid #233048;border-radius:16px;padding:18px}
+    pre{white-space:pre-wrap;margin:0}
+    .actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:14px}
+    .btn{background:#3b82f6;color:#fff;padding:10px 16px;border-radius:10px;text-decoration:none;display:inline-block;border:none;cursor:pointer}
+    .btn.secondary{background:#2a3346}
+    .muted{color:#9aa3ad}
+    img{max-width:100%;border-radius:12px;border:1px solid #233048}
+    form{margin:0}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>💫 Mi Match</h1>
+
+    {% if sin_match %}
+      <p class="muted">Aún no tienes match. Pídele al admin que genere los emparejamientos.</p>
+      <div class="actions">
+        <a class="btn secondary" href="{{ url_for('index_page') }}">Volver</a>
+      </div>
+    {% else %}
+      <div class="card">
+        <h3>Explicación del match</h3>
+        <pre>{{ match.razon_match }}</pre>
+      </div>
+
+      <div class="grid">
+        <div class="card">
+          <h3>{{ match.nombre_1 }}</h3>
+          <pre>{{ match.perfil_1 }}</pre>
+        </div>
+        <div class="card">
+          <h3>{{ match.nombre_2 }}</h3>
+          <pre>{{ match.perfil_2 }}</pre>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Evidencia</h3>
+        {% if match.evidencia %}
+          <p class="muted">Archivo:</p>
+          <img src="{{ url_for('static', filename='evidencias_alfa/' ~ match.evidencia) }}" alt="Evidencia del match" />
+        {% else %}
+          <p class="muted">Aún no hay evidencia subida.</p>
+        {% endif %}
+
+        <form class="actions" method="post" action="{{ url_for('subir_foto_match') }}" enctype="multipart/form-data">
+          <input type="file" name="foto" accept="image/*" />
+          <button class="btn" type="submit">Subir foto</button>
+        </form>
+      </div>
+
+      <div class="card">
+        <h3>¿Coincidió bien el match?</h3>
+        {% if feedback_dado is not none %}
+          <p class="muted">Gracias por tu feedback ✅</p>
+        {% else %}
+          <div class="actions">
+            <form method="post" action="{{ url_for('feedback_match') }}">
+              <input type="hidden" name="match_id" value="{{ match.id }}" />
+              <input type="hidden" name="feedback" value="1" />
+              <button class="btn" type="submit">Sí</button>
+            </form>
+            <form method="post" action="{{ url_for('feedback_match') }}">
+              <input type="hidden" name="match_id" value="{{ match.id }}" />
+              <input type="hidden" name="feedback" value="0" />
+              <button class="btn secondary" type="submit">No</button>
+            </form>
+          </div>
+        {% endif %}
+      </div>
+
+      <div class="actions">
+        <a class="btn secondary" href="{{ url_for('conexion_alfa_mi_perfil') }}">Mi perfil</a>
+        <a class="btn secondary" href="{{ url_for('index_page') }}">Inicio</a>
+      </div>
+    {% endif %}
+  </div>
+</body>
+</html>

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Conexión Alfa — Formulario</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body{font-family:Segoe UI,system-ui,Arial;background:#0f1115;color:#e8e8e8;margin:0}
+    .wrap{max-width:820px;margin:40px auto;padding:24px}
+    h1{margin:0 0 10px}
+    p.muted{color:#9aa3ad}
+    .card{background:#141821;border:1px solid #233048;border-radius:16px;padding:18px;margin:16px 0}
+    label{display:block;margin:10px 0 6px}
+    textarea,input[type="text"]{width:100%;box-sizing:border-box;background:#0c0f16;border:1px solid #2a3a55;color:#e8e8e8;border-radius:10px;padding:10px}
+    .row{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+    .actions{display:flex;gap:12px;flex-wrap:wrap;margin-top:14px}
+    .btn{background:#3b82f6;border:none;color:#fff;padding:10px 16px;border-radius:10px;cursor:pointer}
+    .btn.secondary{background:#2a3346}
+    a{color:#8ab4ff;text-decoration:none}
+    a:hover{text-decoration:underline}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>🧩 Conexión Alfa</h1>
+    {% if ya_existe %}
+      <p class="muted">Ya enviaste este formulario. Puedes <a href="{{ url_for('conexion_alfa_mi_perfil') }}">ver tu perfil</a> o volver a enviarlo para actualizar tus respuestas.</p>
+    {% else %}
+      <p class="muted">Completa estas 7 preguntas rápidas para construir tu perfil y poder emparejarte.</p>
+    {% endif %}
+
+    <form class="card" method="post" action="{{ url_for('conexion_alfa_form') }}">
+      <div class="row">
+        <div>
+          <label for="r1">1) ¿Cómo te describes?</label>
+          <textarea id="r1" name="r1" rows="2" placeholder="Ej: Curioso, me encanta aprender cosas nuevas..."></textarea>
+        </div>
+        <div>
+          <label for="r2">2) ¿Qué te encanta?</label>
+          <textarea id="r2" name="r2" rows="2" placeholder="Ej: Viajar, la música en vivo, cocinar..."></textarea>
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label for="r3">3) ¿Con qué sueñas?</label>
+          <textarea id="r3" name="r3" rows="2" placeholder="Ej: Emprender, escribir un libro, maratón..."></textarea>
+        </div>
+        <div>
+          <label for="r4">4) Nunca dirías que no a...</label>
+          <textarea id="r4" name="r4" rows="2" placeholder="Ej: Un buen café, una peli, una caminata..."></textarea>
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label for="r5">5) ¿Qué haces en tu tiempo libre?</label>
+          <textarea id="r5" name="r5" rows="2" placeholder="Ej: Leer, fútbol, videojuegos, pintura..."></textarea>
+        </div>
+        <div>
+          <label for="r6">6) ¿Tu estilo (ropa/música/vida)?</label>
+          <textarea id="r6" name="r6" rows="2" placeholder="Ej: Casual, rockero, minimalista..."></textarea>
+        </div>
+      </div>
+
+      <div>
+        <label for="r7">7) ¿Qué te gustaría hacer con tu equipo?</label>
+        <textarea id="r7" name="r7" rows="2" placeholder="Ej: Un torneo, voluntariado, hackatón..."></textarea>
+      </div>
+
+      <div class="actions">
+        <button class="btn" type="submit">{{ 'Actualizar respuestas' if ya_existe else 'Guardar respuestas' }}</button>
+        <a class="btn secondary" href="{{ url_for('index_page') }}">Volver</a>
+      </div>
+    </form>
+  </div>
+</body>
+</html>

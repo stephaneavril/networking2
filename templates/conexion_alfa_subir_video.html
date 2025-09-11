@@ -1,21 +1,31 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <title>Sube tu video de match</title>
+  <meta charset="utf-8" />
+  <title>Subir Video — Conexión Alfa</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
-    body { background: #0c0e2c; color: white; font-family: 'Segoe UI', sans-serif; padding: 30px; }
-    h1 { color: #ec1c24; text-align: center; }
-    form { max-width: 500px; margin: auto; background: #1f2140; padding: 20px; border-radius: 10px; }
-    input[type="file"], button { width: 100%; padding: 10px; margin-top: 15px; border-radius: 6px; }
-    button { background: #ec1c24; color: white; border: none; font-weight: bold; cursor: pointer; }
+    body{font-family:Segoe UI,system-ui;background:#0f1115;color:#e8e8e8;margin:0}
+    .wrap{max-width:720px;margin:40px auto;padding:24px}
+    .card{background:#141821;border:1px solid #233048;border-radius:16px;padding:18px}
+    .actions{display:flex;gap:12px;margin-top:14px}
+    .btn{background:#3b82f6;color:#fff;padding:10px 16px;border-radius:10px;text-decoration:none;display:inline-block;border:none;cursor:pointer}
+    .btn.secondary{background:#2a3346}
   </style>
 </head>
 <body>
-  <h1>🎥 Sube tu video con {{ match.nombre_1 if match.correo_1 != session['correo'] else match.nombre_2 }}</h1>
-  <form method="POST" enctype="multipart/form-data">
-    <input type="file" name="video" accept="video/*" required>
-    <button type="submit">Subir Video</button>
-  </form>
+  <div class="wrap">
+    <h1>🎥 Subir Video con tu Match</h1>
+    <div class="card">
+      <p>Personas: <strong>{{ match.nombre_1 }}</strong> y <strong>{{ match.nombre_2 }}</strong></p>
+      <form method="post" enctype="multipart/form-data">
+        <input type="file" name="video" accept="video/*" />
+        <div class="actions">
+          <button class="btn" type="submit">Subir</button>
+          <a class="btn secondary" href="{{ url_for('conexion_alfa_mi_match') }}">Volver</a>
+        </div>
+      </form>
+    </div>
+  </div>
 </body>
 </html>
