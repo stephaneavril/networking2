@@ -1,9 +1,15 @@
-# app.py — Mini TEAMS: Login → Preguntas → Adivina Quién
+# app.py — Mini TEAMS: Login → Preguntas → Adivina Quién + Conexión Alfa (estable)
 import os
 import json
 import random
+import re
+import math
+import time
 from functools import wraps
 from typing import Tuple
+from collections import Counter
+from difflib import SequenceMatcher
+from threading import Lock
 
 from flask import (
     Flask, render_template, render_template_string, request, session,
@@ -211,7 +217,7 @@ def set_reto_activo(nombre: str, activo: bool):
     """, (nombre, activo))
 
 # ─────────────────────────────────────────────────────────────
-# Rutas
+# Rutas base
 # ─────────────────────────────────────────────────────────────
 @app.route("/", methods=["GET", "HEAD"])
 def home():
@@ -230,7 +236,7 @@ def index_page():
         nombre=session.get("nombre", ""),
         ya_respondio=ya_respondio,
         adivina_activo=reto_activo("Adivina Quién"),
-        show_admin=session.get("is_admin", False)  # <- para ocultar botón
+        show_admin=session.get("is_admin", False)
     )
 
 @app.route("/login", methods=["GET", "POST"], endpoint="login")
@@ -255,7 +261,7 @@ def logout():
     session.clear()
     return redirect(url_for("login"))
 
-# --- Admin login aislado (no ligado a jugador) ---
+# --- Admin login aislado ---
 @app.route("/admin", methods=["GET", "POST"])
 def admin_login():
     if request.method == "POST":
@@ -276,7 +282,7 @@ def admin_login():
     </body></html>
     """)
 
-# --- Preguntas (una tarjeta a la vez lo maneja la plantilla/JS) ---
+# --- Preguntas post-login ---
 @app.route("/preguntas_post_login", methods=["GET", "POST"])
 @login_required
 def preguntas_post_login():
@@ -307,13 +313,9 @@ def preguntas_post_login():
     flash("¡Gracias! Tus respuestas fueron guardadas.")
     return redirect(url_for("adivina"))
 
-# --- Util para juego: 5 categorías y 3 pistas random ---
-CAMPOS_JUEGO = ["r2","r3","r4","r6","r9"]  # 5 preguntas/respuestas usadas en el juego
-
-import random  # arriba del archivo si no lo tienes
-
-import random
-
+# ─────────────────────────────────────────────────────────────
+# Juego Adivina Quién
+# ─────────────────────────────────────────────────────────────
 def _participantes_para_juego(mi_id: int, n: int = 5):
     rows = query("""
         SELECT j.id, j.nombre,
@@ -323,7 +325,6 @@ def _participantes_para_juego(mi_id: int, n: int = 5):
         WHERE j.id <> %s
     """, (mi_id,))
 
-    # Baraja y recorta a n (máx 5 por default)
     random.shuffle(rows)
     rows = rows[:n] if len(rows) > n else rows
 
@@ -353,7 +354,6 @@ def _participantes_para_juego(mi_id: int, n: int = 5):
         out.append({"id": x["id"], "nombre": x["nombre"], "pistas": pistas})
     return out
 
-
 @app.route("/adivina")
 @login_required
 def adivina():
@@ -361,19 +361,16 @@ def adivina():
         flash("Adivina Quién aún no está activo. Espera a que el administrador lo habilite.")
         return redirect(url_for("index_page"))
     me = session["jugador_id"]
-
     participantes = session.get("adivina_set")
     if not participantes:
         participantes = _participantes_para_juego(me)
-        session["adivina_set"] = participantes  # congelar la selección de esta partida
-
+        session["adivina_set"] = participantes
     return render_template(
         "adivina.html",
         yo=session.get("nombre",""),
         participantes_json=json.dumps(participantes, ensure_ascii=False)
     )
 
-# Puntaje: +10 acierto, −10 fallo, bonus por llegada: 1º +50, 2º +40, 3º +30, 4º +40, resto +10
 @app.route("/adivina_finalizado", methods=["POST"])
 @login_required
 def adivina_finalizado():
@@ -384,17 +381,15 @@ def adivina_finalizado():
 
     puntos_base = aciertos * 10 - fallos * 10
 
-    # posición de llegada (antes de insertar el actual)
     pos = query("SELECT COUNT(*) AS c FROM adivina_scores")[0]["c"] + 1
     if   pos == 1: puntos_bonus = 50
     elif pos == 2: puntos_bonus = 40
     elif pos == 3: puntos_bonus = 30
-    elif pos == 4: puntos_bonus = 40  # pedido explícito
+    elif pos == 4: puntos_bonus = 40
     else:          puntos_bonus = 10
 
     puntos_total = puntos_base + puntos_bonus
 
-    # upsert de la marca de finalización (clave primaria jugador_id)
     execute("""
         INSERT INTO adivina_scores (jugador_id, aciertos, rondas, fallos, puntos_base, puntos_bonus, puntos_total)
         VALUES (%s,%s,%s,%s,%s,%s,%s)
@@ -407,7 +402,6 @@ def adivina_finalizado():
             puntos_total=EXCLUDED.puntos_total
     """, (session["jugador_id"], aciertos, rondas, fallos, puntos_base, puntos_bonus, puntos_total))
 
-# limpiar el set congelado para permitir nueva partida con nuevo random
     session.pop("adivina_set", None)
     return jsonify({"ok": True, "pos": pos, "puntos_base": puntos_base, "puntos_bonus": puntos_bonus, "puntos_total": puntos_total})
 
@@ -417,7 +411,6 @@ def adivina_finalizado():
 @app.route("/admin_panel", methods=["GET", "POST"])
 @admin_required
 def admin_panel():
-    # POST: toggles desde tu HTML
     if request.method == "POST":
         reto_id = request.form.get("reto_id")
         activo  = request.form.get("activo")
@@ -495,6 +488,409 @@ def admin_desactivar_adivina():
     flash("Adivina Quién desactivado.")
     return redirect(url_for("admin_panel"))
 
+# ─────────────────────────────────────────────────────────────
+# Conexión Alfa — Tablas + helpers + rutas estables
+# ─────────────────────────────────────────────────────────────
+MATCH_BUILD_LOCK = Lock()
+
+def _ensure_tablas_conexion_alfa():
+    execute("""
+        CREATE TABLE IF NOT EXISTS conexion_alfa_respuestas (
+            jugador_id INTEGER PRIMARY KEY,
+            r1 TEXT, r2 TEXT, r3 TEXT, r4 TEXT, r5 TEXT, r6 TEXT, r7 TEXT,
+            created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+    execute("""
+        CREATE TABLE IF NOT EXISTS conexion_alfa_matches (
+            id SERIAL PRIMARY KEY,
+            jugador_1_id INTEGER NOT NULL,
+            jugador_2_id INTEGER NOT NULL,
+            score FLOAT NOT NULL,
+            razon_match TEXT,
+            evidencia TEXT,
+            feedback SMALLINT,
+            created_at TIMESTAMP DEFAULT NOW()
+        )
+    """)
+    execute("CREATE INDEX IF NOT EXISTS idx_ca_j1 ON conexion_alfa_matches(jugador_1_id)")
+    execute("CREATE INDEX IF NOT EXISTS idx_ca_j2 ON conexion_alfa_matches(jugador_2_id)")
+
+def _tok(s: str):
+    if not s: return []
+    s = s.lower()
+    s = re.sub(r"[^\w\sáéíóúüñ]", " ", s, flags=re.UNICODE)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s.split()
+
+def _tf(text: str) -> Counter:
+    return Counter(_tok(text or ""))
+
+def _cosine_tf(a: Counter, b: Counter) -> float:
+    if not a or not b: return 0.0
+    keys = set(a.keys()) | set(b.keys())
+    dot = sum(a[k]*b[k] for k in keys)
+    na = math.sqrt(sum(v*v for v in a.values()))
+    nb = math.sqrt(sum(v*v for v in b.values()))
+    if na == 0 or nb == 0: return 0.0
+    return dot/(na*nb)
+
+ALFA_CAMPOS_BASE = [
+    ("r2","Pasión"), ("r3","Dato curioso"), ("r4","Película"),
+    ("r6","Deporte"), ("r8","Prenda"), ("r9","Concierto"),
+    ("r10","Libro/Arte"), ("r12","Mascota"), ("r13","Hijos"),
+]
+
+ALFA_CAMPOS_EXTRA = [("r1","Cómo te describes"), ("r2","Qué te encanta"),
+                     ("r3","Con qué sueñas"), ("r4","Nunca dirías que no"),
+                     ("r5","Tiempo libre"), ("r6","Estilo"), ("r7","Qué con tu equipo")]
+
+def _perfil_texto_agregado(row_base: dict, row_extra: dict) -> str:
+    partes = []
+    for k,label in ALFA_CAMPOS_BASE:
+        v = (row_base or {}).get(k)
+        if v: partes.append(f"{label}: {v}")
+    for k,label in ALFA_CAMPOS_EXTRA:
+        v = (row_extra or {}).get(k)
+        if v: partes.append(f"{label}: {v}")
+    return " | ".join(partes)
+
+def _razones_campos(row_base1,row_extra1,row_base2,row_extra2, top_k=3):
+    pares = []
+    for k,label in ALFA_CAMPOS_BASE + ALFA_CAMPOS_EXTRA:
+        v1 = (row_base1 or {}).get(k) or (row_extra1 or {}).get(k) or ""
+        v2 = (row_base2 or {}).get(k) or (row_extra2 or {}).get(k) or ""
+        if v1 and v2:
+            ratio = SequenceMatcher(None, v1.lower(), v2.lower()).ratio()
+            inter = set(_tok(v1)) & set(_tok(v2))
+            ratio += min(len(inter),3)*0.05
+            pares.append((ratio,label,v1,v2))
+    pares.sort(reverse=True, key=lambda x: x[0])
+    return pares[:top_k]
+
+def _explicacion_match(row_base1,row_extra1,row_base2,row_extra2, score):
+    razones = _razones_campos(row_base1,row_extra1,row_base2,row_extra2, top_k=3)
+    if not razones:
+        return f"Compatibilidad general (score {score:.2f})."
+    lines = [f"• Afinidad en **{label}** → “{v1}” ~ “{v2}”" for _,label,v1,v2 in razones]
+    return "Motivo del match:\n" + "\n".join(lines)
+
+def _get_personas_con_perfil():
+    base = {r["jugador_id"]: r for r in query("""
+        SELECT r.*, j.id AS jugador_id, j.nombre, j.correo
+        FROM formulario_respuestas r
+        JOIN jugadores j ON j.id=r.jugador_id
+    """)}
+    extra = {r["jugador_id"]: r for r in query("""
+        SELECT *
+        FROM conexion_alfa_respuestas
+    """)}
+    personas = []
+    for pid in base.keys() | extra.keys():
+        jb = base.get(pid, {})
+        je = extra.get(pid, {})
+        if "nombre" not in jb or "correo" not in jb:
+            jrow = query("SELECT nombre, correo FROM jugadores WHERE id=%s", (pid,))
+            if jrow:
+                if "nombre" not in jb: jb["nombre"] = jrow[0]["nombre"]
+                if "correo" not in jb: jb["correo"] = jrow[0]["correo"]
+        personas.append({
+            "id": pid,
+            "nombre": jb.get("nombre"),
+            "correo": jb.get("correo"),
+            "base": jb,
+            "extra": je
+        })
+    personas = [p for p in personas if _perfil_texto_agregado(p["base"], p["extra"]).strip()]
+    personas.sort(key=lambda x: x["id"])
+    return personas
+
+def _limpiar_matches():
+    execute("DELETE FROM conexion_alfa_matches")
+
+def _insertar_match_bidireccional(a_id, b_id, score, razon):
+    execute("""INSERT INTO conexion_alfa_matches (jugador_1_id, jugador_2_id, score, razon_match)
+               VALUES (%s,%s,%s,%s)""", (a_id,b_id,score,razon))
+    execute("""INSERT INTO conexion_alfa_matches (jugador_1_id, jugador_2_id, score, razon_match)
+               VALUES (%s,%s,%s,%s)""", (b_id,a_id,score,razon))
+
+def _greedy_one_to_one(pers, sim):
+    N = len(pers)
+    edges = []
+    for i in range(N):
+        for j in range(i+1,N):
+            edges.append((sim[i][j], i, j))
+    edges.sort(reverse=True, key=lambda x: x[0])
+    used = set(); pairs=[]
+    for sc,i,j in edges:
+        if i in used or j in used: continue
+        used.add(i); used.add(j)
+        pairs.append((i,j,sc))
+    return pairs
+
+@app.route("/generar_matches_conexion_alfa", methods=["POST"])
+@admin_required
+def generar_matches_conexion_alfa():
+    _ensure_tablas_conexion_alfa()
+    if not MATCH_BUILD_LOCK.acquire(blocking=False):
+        flash("Otro proceso ya está generando matches. Inténtalo en unos segundos.")
+        return redirect(url_for("admin_panel"))
+
+    try:
+        personas = _get_personas_con_perfil()
+        N = len(personas)
+        if N < 2:
+            flash("Se requieren al menos 2 participantes con perfil.")
+            return redirect(url_for("admin_panel"))
+
+        t0 = time.time()
+        tfs = [_tf(_perfil_texto_agregado(p["base"], p["extra"])) for p in personas]
+        sim = [[0.0]*N for _ in range(N)]
+        for i in range(N):
+            for j in range(i+1, N):
+                s = _cosine_tf(tfs[i], tfs[j])
+                sim[i][j]=sim[j][i]=s
+
+        pairs = _greedy_one_to_one(personas, sim)
+
+        _limpiar_matches()
+        for i,j,sc in pairs:
+            p1, p2 = personas[i], personas[j]
+            razon = _explicacion_match(p1["base"],p1["extra"], p2["base"],p2["extra"], sc)
+            _insertar_match_bidireccional(p1["id"], p2["id"], float(sc), razon)
+
+        dt = time.time() - t0
+        flash(f"Matches generados: {len(pairs)} parejas (participantes: {N}) en {dt:.2f}s.")
+        return redirect(url_for("admin_panel"))
+    finally:
+        MATCH_BUILD_LOCK.release()
+
+# Formulario Conexión Alfa
+@app.route("/conexion_alfa_form", methods=["GET","POST"])
+@login_required
+def conexion_alfa_form():
+    _ensure_tablas_conexion_alfa()
+    me = session["jugador_id"]
+
+    if request.method == "POST":
+        data = {f"r{k}": (request.form.get(f"r{k}") or "").strip() for k in range(1,8)}
+        execute("""
+            INSERT INTO conexion_alfa_respuestas (jugador_id, r1,r2,r3,r4,r5,r6,r7)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+            ON CONFLICT (jugador_id) DO UPDATE
+              SET r1=EXCLUDED.r1, r2=EXCLUDED.r2, r3=EXCLUDED.r3,
+                  r4=EXCLUDED.r4, r5=EXCLUDED.r5, r6=EXCLUDED.r6, r7=EXCLUDED.r7,
+                  updated_at=NOW()
+        """, (me, data["r1"],data["r2"],data["r3"],data["r4"],data["r5"],data["r6"],data["r7"]))
+        flash("¡Gracias! Tus respuestas fueron guardadas.")
+        return redirect(url_for("conexion_alfa_mi_perfil"))
+
+    ya = query("SELECT 1 FROM conexion_alfa_respuestas WHERE jugador_id=%s", (me,))
+    return render_template("conexion_alfa.html", ya_existe=bool(ya))
+
+def _perfil_ia_ligero(base_row, extra_row):
+    piezas = []
+    for k,label in ALFA_CAMPOS_BASE:
+        v = (base_row or {}).get(k);      piezas.append(f"• {label}: {v}.") if v else None
+    for k,label in ALFA_CAMPOS_EXTRA:
+        v = (extra_row or {}).get(k);     piezas.append(f"• {label}: {v}.") if v else None
+    return "\n".join(piezas) or "Perfil en construcción."
+
+@app.route("/conexion_alfa_mi_perfil", methods=["GET"])
+@login_required
+def conexion_alfa_mi_perfil():
+    me = session["jugador_id"]
+    r_base = query("SELECT * FROM formulario_respuestas WHERE jugador_id=%s",(me,))
+    r_extra = query("SELECT * FROM conexion_alfa_respuestas WHERE jugador_id=%s",(me,))
+    if not r_base and not r_extra:
+        flash("Completa primero tu formulario.")
+        return redirect(url_for("conexion_alfa_form"))
+    perfil_txt = _perfil_ia_ligero(r_base[0] if r_base else {}, r_extra[0] if r_extra else {})
+    return render_template("conexion_alfa_perfil.html", perfil={"perfil_ia": perfil_txt})
+
+# Alias práctico: /conexion_alfa → perfil
+@app.route("/conexion_alfa", methods=["GET"])
+@login_required
+def conexion_alfa_redirect():
+    return redirect(url_for("conexion_alfa_mi_perfil"))
+
+@app.route("/conexion_alfa_mi_match", methods=["GET"])
+@login_required
+def conexion_alfa_mi_match():
+    me = session["jugador_id"]
+    m = query("""
+        SELECT m.id, m.jugador_1_id, m.jugador_2_id, m.score, m.razon_match, m.evidencia, m.feedback,
+               j1.nombre AS nombre_1, j2.nombre AS nombre_2
+        FROM conexion_alfa_matches m
+        JOIN jugadores j1 ON j1.id = m.jugador_1_id
+        JOIN jugadores j2 ON j2.id = m.jugador_2_id
+        WHERE m.jugador_1_id=%s
+        ORDER BY m.score DESC
+        LIMIT 1
+    """, (me,))
+    if not m:
+        return render_template("conexion_alfa_mi_match.html", sin_match=True)
+
+    m = m[0]
+    b1 = query("SELECT * FROM formulario_respuestas WHERE jugador_id=%s",(m["jugador_1_id"],))
+    e1 = query("SELECT * FROM conexion_alfa_respuestas WHERE jugador_id=%s",(m["jugador_1_id"],))
+    b2 = query("SELECT * FROM formulario_respuestas WHERE jugador_id=%s",(m["jugador_2_id"],))
+    e2 = query("SELECT * FROM conexion_alfa_respuestas WHERE jugador_id=%s",(m["jugador_2_id"],))
+    perfil_1 = _perfil_ia_ligero(b1[0] if b1 else {}, e1[0] if e1 else {})
+    perfil_2 = _perfil_ia_ligero(b2[0] if b2 else {}, e2[0] if e2 else {})
+
+    match_dict = {
+        "id": m["id"],
+        "nombre_1": m["nombre_1"],
+        "nombre_2": m["nombre_2"],
+        "perfil_1": perfil_1,
+        "perfil_2": perfil_2,
+        "razon_match": m["razon_match"],
+        "evidencia": m["evidencia"]
+    }
+    return render_template("conexion_alfa_mi_match.html",
+                           sin_match=False, match=match_dict, feedback_dado=m["feedback"])
+
+# Evidencia/feedback del match
+@app.route("/subir_foto_match", methods=["POST"])
+@login_required
+def subir_foto_match():
+    me = session["jugador_id"]
+    f = request.files.get("foto")
+    if not f or not f.filename:
+        flash("Selecciona una imagen válida.")
+        return redirect(url_for("conexion_alfa_mi_match"))
+
+    os.makedirs(os.path.join(app.static_folder, "evidencias_alfa"), exist_ok=True)
+    fname = f"evid_{me}_{int(time.time())}.jpg"
+    f.save(os.path.join(app.static_folder, "evidencias_alfa", fname))
+
+    par = query("SELECT jugador_2_id FROM conexion_alfa_matches WHERE jugador_1_id=%s LIMIT 1", (me,))
+    if par:
+        other = par[0]["jugador_2_id"]
+        execute("UPDATE conexion_alfa_matches SET evidencia=%s WHERE (jugador_1_id=%s AND jugador_2_id=%s) OR (jugador_1_id=%s AND jugador_2_id=%s)",
+                (fname, me, other, other, me))
+    flash("¡Listo! Evidencia subida.")
+    return redirect(url_for("conexion_alfa_mi_match"))
+
+@app.route("/feedback_match", methods=["POST"])
+@login_required
+def feedback_match():
+    me = session["jugador_id"]
+    match_id = request.form.get("match_id")
+    val = request.form.get("feedback")
+    if match_id and val in ("0","1"):
+        ok = query("SELECT 1 FROM conexion_alfa_matches WHERE id=%s AND jugador_1_id=%s", (match_id, me))
+        if ok:
+            execute("UPDATE conexion_alfa_matches SET feedback=%s WHERE id=%s", (int(val), match_id))
+            flash("¡Gracias por tu feedback!")
+    return redirect(url_for("conexion_alfa_mi_match"))
+
+# Rutas legacy opcionales (si quieres usar pantallas separadas de foto/video)
+@app.route("/conexion_alfa_subir_foto", methods=["GET", "POST"])
+@login_required
+def conexion_alfa_subir_foto():
+    me = session["jugador_id"]
+    m = query("SELECT jugador_2_id FROM conexion_alfa_matches WHERE jugador_1_id=%s LIMIT 1", (me,))
+    if not m:
+        flash("Aún no tienes match.")
+        return redirect(url_for("conexion_alfa_mi_match"))
+    if request.method == "POST":
+        f = request.files.get("foto")
+        if not f or not f.filename:
+            flash("Sube una imagen válida.")
+            return redirect(url_for("conexion_alfa_subir_foto"))
+        os.makedirs(os.path.join(app.static_folder, "evidencias_alfa"), exist_ok=True)
+        fname = f"foto_{me}_{int(time.time())}.jpg"
+        f.save(os.path.join(app.static_folder, "evidencias_alfa", fname))
+        execute("""
+            UPDATE conexion_alfa_matches SET evidencia=%s WHERE jugador_1_id=%s
+        """, (fname, me))
+        flash("Foto subida.")
+        return redirect(url_for("conexion_alfa_mi_match"))
+
+    match = query("""
+        SELECT j1.nombre AS nombre_1, j1.correo AS correo_1,
+               j2.nombre AS nombre_2, j2.correo AS correo_2
+        FROM jugadores j1
+        JOIN conexion_alfa_matches m ON m.jugador_1_id=j1.id
+        JOIN jugadores j2 ON j2.id=m.jugador_2_id
+        WHERE j1.id=%s
+        LIMIT 1
+    """, (me,))
+    return render_template("conexion_alfa_subir_foto.html", match=match[0])
+
+@app.route("/conexion_alfa_subir_video", methods=["GET", "POST"])
+@login_required
+def conexion_alfa_subir_video():
+    me = session["jugador_id"]
+    m = query("SELECT jugador_2_id FROM conexion_alfa_matches WHERE jugador_1_id=%s LIMIT 1", (me,))
+    if not m:
+        flash("Aún no tienes match.")
+        return redirect(url_for("conexion_alfa_mi_match"))
+    if request.method == "POST":
+        f = request.files.get("video")
+        if not f or not f.filename:
+            flash("Sube un video válido.")
+            return redirect(url_for("conexion_alfa_subir_video"))
+        os.makedirs(os.path.join(app.static_folder, "evidencias_alfa"), exist_ok=True)
+        fname = f"video_{me}_{int(time.time())}.mp4"
+        f.save(os.path.join(app.static_folder, "evidencias_alfa", fname))
+        execute("""
+            UPDATE conexion_alfa_matches SET evidencia=%s WHERE jugador_1_id=%s
+        """, (fname, me))
+        flash("Video subido.")
+        return redirect(url_for("conexion_alfa_mi_match"))
+
+    match = query("""
+        SELECT j1.nombre AS nombre_1, j1.correo AS correo_1,
+               j2.nombre AS nombre_2, j2.correo AS correo_2
+        FROM jugadores j1
+        JOIN conexion_alfa_matches m ON m.jugador_1_id=j1.id
+        JOIN jugadores j2 ON j2.id=m.jugador_2_id
+        WHERE j1.id=%s
+        LIMIT 1
+    """, (me,))
+    return render_template("conexion_alfa_subir_video.html", match=match[0])
+
+# Vista admin opcional para ver matches + métricas simples
+@app.route("/conexion_alfa_emparejamientos", methods=["GET"])
+@admin_required
+def conexion_alfa_emparejamientos():
+    # pares únicos (a<b)
+    pares = query("""
+        SELECT LEAST(jugador_1_id, jugador_2_id) AS a,
+               GREATEST(jugador_1_id, jugador_2_id) AS b
+        FROM conexion_alfa_matches
+        GROUP BY 1,2
+    """)
+    matches = []
+    for row in pares:
+        a,b = row["a"], row["b"]
+        m = query("""
+            SELECT m1.id, m1.jugador_1_id, j1.nombre AS nombre_1,
+                   m1.jugador_2_id, j2.nombre AS nombre_2,
+                   m1.score, m1.razon_match, m1.evidencia, m1.feedback
+            FROM conexion_alfa_matches m1
+            JOIN jugadores j1 ON j1.id=m1.jugador_1_id
+            JOIN jugadores j2 ON j2.id=m1.jugador_2_id
+            WHERE m1.jugador_1_id=%s AND m1.jugador_2_id=%s
+            LIMIT 1
+        """, (a,b))
+        if not m: continue
+        m = m[0]
+        matches.append(m)
+
+    fb_vals = [m["feedback"] for m in matches if m["feedback"] is not None]
+    if fb_vals:
+        tasa = sum(1 for v in fb_vals if v==1)/len(fb_vals)
+        accuracy = precision = recall = f1 = round(tasa, 3)
+    else:
+        accuracy = precision = recall = f1 = None
+
+    return render_template("conexion_alfa_emparejamientos.html",
+                           matches=matches, accuracy=accuracy, precision=precision, recall=recall, f1=f1)
+
 # Aux del panel que tu HTML llama
 @app.route("/eliminar_todos_los_jugadores", methods=["POST"])
 @admin_required
@@ -520,12 +916,6 @@ def ver_fotos_equipo():
 @admin_required
 def generar_contenido_adivina():
     flash("Adivina Quién usa las respuestas actuales (no requiere pre-carga).")
-    return redirect(url_for("admin_panel"))
-
-@app.route("/generar_matches_conexion_alfa", methods=["POST"])
-@admin_required
-def generar_matches_conexion_alfa():
-    flash("Conexión Alfa no está habilitado en esta versión mínima.")
     return redirect(url_for("admin_panel"))
 
 # ─────────────────────────────────────────────────────────────
