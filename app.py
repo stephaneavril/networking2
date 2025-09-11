@@ -145,23 +145,15 @@ CREATE TABLE IF NOT EXISTS retos (
 );
 """
 
-def ensure_schema():
-    for stmt in [s.strip() for s in DDL.split(";") if s.strip()]:
-        execute(stmt + ";")
-    # seeds
-    execute("INSERT INTO retos (nombre,activo) VALUES ('Adivina Quién', FALSE) ON CONFLICT (nombre) DO NOTHING;")
-    execute("INSERT INTO retos (nombre,activo) VALUES ('Conexión Alfa', FALSE) ON CONFLICT (nombre) DO NOTHING;")
-    for nombre in ('MI6 v1', 'MI6 v2', 'MI6 v3'):
-        execute("INSERT INTO retos (nombre,activo) VALUES (%s, FALSE) ON CONFLICT (nombre) DO NOTHING;", (nombre,))
-
 def normalize_schema():
-    # adivina_scores columnas por si vienes de otra versión
+    # ---- Adivina: columnas defensivas ----
     execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS rondas INTEGER NOT NULL DEFAULT 0;")
     execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS fallos INTEGER NOT NULL DEFAULT 0;")
     execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS puntos_base  INTEGER NOT NULL DEFAULT 0;")
     execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS puntos_bonus INTEGER NOT NULL DEFAULT 0;")
     execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS puntos_total INTEGER NOT NULL DEFAULT 0;")
-    # jugadores columnas defensivas
+
+    # ---- Jugadores: columnas defensivas ----
     sql = r"""
 DO $do$
 BEGIN
@@ -180,6 +172,63 @@ END
 $do$;
 """
     execute(sql)
+
+    # ========= 🔧 FIX Conexión Alfa =========
+    # 1) Asegura que exista la tabla de respuestas (con jugador_id)
+    execute("""
+        CREATE TABLE IF NOT EXISTS conexion_alfa_respuestas (
+            jugador_id INTEGER,
+            r1 TEXT, r2 TEXT, r3 TEXT, r4 TEXT, r5 TEXT, r6 TEXT, r7 TEXT,
+            created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW()
+        );
+    """)
+
+    # 2) Si antes creaste la tabla con 'id' (y no 'jugador_id'), migra sin perder datos
+    execute(r"""
+DO $$
+BEGIN
+  -- agrega jugador_id si faltara
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='conexion_alfa_respuestas' AND column_name='jugador_id'
+  ) THEN
+    ALTER TABLE conexion_alfa_respuestas ADD COLUMN jugador_id INTEGER;
+  END IF;
+
+  -- si existe columna 'id', copia sus valores a jugador_id donde esté NULL
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='conexion_alfa_respuestas' AND column_name='id'
+  ) THEN
+    UPDATE conexion_alfa_respuestas SET jugador_id = id WHERE jugador_id IS NULL;
+  END IF;
+
+  -- índice único para ON CONFLICT (jugador_id)
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_indexes
+    WHERE schemaname='public' AND indexname='ux_ca_respuestas_jugador_id'
+  ) THEN
+    CREATE UNIQUE INDEX ux_ca_respuestas_jugador_id ON conexion_alfa_respuestas(jugador_id);
+  END IF;
+END $$;
+""")
+
+    # 3) (Opcional pero recomendable) asegurar la tabla de matches
+    execute("""
+        CREATE TABLE IF NOT EXISTS conexion_alfa_matches (
+            id SERIAL PRIMARY KEY,
+            jugador_1_id INTEGER NOT NULL,
+            jugador_2_id INTEGER NOT NULL,
+            score FLOAT NOT NULL,
+            razon_match TEXT,
+            evidencia TEXT,
+            feedback SMALLINT,
+            created_at TIMESTAMP DEFAULT NOW()
+        );
+    """)
+    execute("CREATE INDEX IF NOT EXISTS idx_ca_j1 ON conexion_alfa_matches(jugador_1_id)")
+    execute("CREATE INDEX IF NOT EXISTS idx_ca_j2 ON conexion_alfa_matches(jugador_2_id)")
+
 
 ensure_schema()
 normalize_schema()
