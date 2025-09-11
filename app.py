@@ -183,14 +183,11 @@ $do$;
 """
     execute(sql)
 
-    # ========= Conexión Alfa: respuestas =========
-    execute("""
-        CREATE TABLE IF NOT EXISTS conexion_alfa_respuestas (
-            jugador_id INTEGER,
-            r1 TEXT, r2 TEXT, r3 TEXT, r4 TEXT, r5 TEXT, r6 TEXT, r7 TEXT,
-            created_at TIMESTAMP DEFAULT NOW(), updated_at TIMESTAMP DEFAULT NOW()
-        );
-    """)
+    # ========= Conexión Alfa: respuestas (migración robusta) =========
+    # 1) Garantiza que la tabla exista (sin pisar estructura previa)
+    execute("CREATE TABLE IF NOT EXISTS conexion_alfa_respuestas (jugador_id INTEGER)")
+
+    # 2) Asegura la clave jugador_id y migra desde una posible columna 'id'
     execute(r"""
 DO $$BEGIN
   IF NOT EXISTS (
@@ -200,21 +197,31 @@ DO $$BEGIN
     ALTER TABLE conexion_alfa_respuestas ADD COLUMN jugador_id INTEGER;
   END IF;
 
+  -- migra valores desde 'id' si existía
   IF EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_name='conexion_alfa_respuestas' AND column_name='id'
   ) THEN
-    UPDATE conexion_alfa_respuestas SET jugador_id = id WHERE jugador_id IS NULL;
-  END IF;
-
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_indexes
-    WHERE schemaname='public' AND indexname='ux_ca_respuestas_jugador_id'
-  ) THEN
-    CREATE UNIQUE INDEX ux_ca_respuestas_jugador_id ON conexion_alfa_respuestas(jugador_id);
+    UPDATE conexion_alfa_respuestas
+       SET jugador_id = id
+     WHERE jugador_id IS NULL;
   END IF;
 END$$;
 """)
+
+    # 3) Asegura todas las columnas r1..r7
+    for col in ("r1","r2","r3","r4","r5","r6","r7"):
+        execute(f"ALTER TABLE conexion_alfa_respuestas ADD COLUMN IF NOT EXISTS {col} TEXT;")
+
+    # 4) Timestamps
+    execute("ALTER TABLE conexion_alfa_respuestas ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();")
+    execute("ALTER TABLE conexion_alfa_respuestas ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();")
+
+    # 5) Índice único por jugador para que funcione ON CONFLICT (jugador_id)
+    execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_ca_respuestas_jugador_id
+        ON conexion_alfa_respuestas(jugador_id)
+    """)
 
     # ========= Conexión Alfa: matches (renombra/crea columnas si faltan) =========
     execute("""
