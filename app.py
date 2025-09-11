@@ -1,4 +1,4 @@
-# app.py — Mini TEAMS: Login → Preguntas → Adivina Quién + Conexión Alfa (estable)
+# app.py — Mini TEAMS: Login → Preguntas → Adivina Quién + Conexión Alfa (estable, migraciones robustas)
 import os
 import json
 import random
@@ -144,7 +144,7 @@ CREATE TABLE IF NOT EXISTS retos (
 """
 
 # ─────────────────────────────────────────────────────────────
-# Esquema + normalización
+# Esquema + normalización (migraciones defensivas)
 # ─────────────────────────────────────────────────────────────
 def ensure_schema():
     for stmt in [s.strip() for s in DDL.split(";") if s.strip()]:
@@ -184,10 +184,10 @@ $do$;
     execute(sql)
 
     # ========= Conexión Alfa: respuestas (migración robusta) =========
-    # 1) Garantiza que la tabla exista (sin pisar estructura previa)
+    # 1) Garantiza que la tabla exista (no pisa estructura previa)
     execute("CREATE TABLE IF NOT EXISTS conexion_alfa_respuestas (jugador_id INTEGER)")
 
-    # 2) Asegura la clave jugador_id y migra desde una posible columna 'id'
+    # 2) Asegura la clave jugador_id y migra desde posible 'id'
     execute(r"""
 DO $$BEGIN
   IF NOT EXISTS (
@@ -197,7 +197,6 @@ DO $$BEGIN
     ALTER TABLE conexion_alfa_respuestas ADD COLUMN jugador_id INTEGER;
   END IF;
 
-  -- migra valores desde 'id' si existía
   IF EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_name='conexion_alfa_respuestas' AND column_name='id'
@@ -209,7 +208,7 @@ DO $$BEGIN
 END$$;
 """)
 
-    # 3) Asegura todas las columnas r1..r7
+    # 3) Asegura columnas r1..r7
     for col in ("r1","r2","r3","r4","r5","r6","r7"):
         execute(f"ALTER TABLE conexion_alfa_respuestas ADD COLUMN IF NOT EXISTS {col} TEXT;")
 
@@ -217,11 +216,64 @@ END$$;
     execute("ALTER TABLE conexion_alfa_respuestas ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();")
     execute("ALTER TABLE conexion_alfa_respuestas ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();")
 
-    # 5) Índice único por jugador para que funcione ON CONFLICT (jugador_id)
+    # 5) Índice único por jugador para ON CONFLICT (jugador_id)
     execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS ux_ca_respuestas_jugador_id
         ON conexion_alfa_respuestas(jugador_id)
     """)
+
+    # 6) 🛠️ Limpieza de columnas legadas (correo/nombre) que puedan estar NOT NULL en instalaciones antiguas
+    execute(r"""
+DO $$BEGIN
+  -- correo
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='conexion_alfa_respuestas' AND column_name='correo'
+  ) THEN
+    -- Backfill desde jugadores
+    EXECUTE $SQL$
+      UPDATE conexion_alfa_respuestas car
+      SET correo = j.correo
+      FROM jugadores j
+      WHERE car.jugador_id = j.id AND (car.correo IS NULL OR car.correo='')
+    $SQL$;
+
+    -- Quitar NOT NULL si lo tuviera
+    IF EXISTS (
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_name='conexion_alfa_respuestas'
+        AND column_name='correo'
+        AND is_nullable='NO'
+    ) THEN
+      ALTER TABLE conexion_alfa_respuestas ALTER COLUMN correo DROP NOT NULL;
+    END IF;
+  END IF;
+
+  -- nombre
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='conexion_alfa_respuestas' AND column_name='nombre'
+  ) THEN
+    EXECUTE $SQL$
+      UPDATE conexion_alfa_respuestas car
+      SET nombre = j.nombre
+      FROM jugadores j
+      WHERE car.jugador_id = j.id AND (car.nombre IS NULL OR car.nombre='')
+    $SQL$;
+
+    IF EXISTS (
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_name='conexion_alfa_respuestas'
+        AND column_name='nombre'
+        AND is_nullable='NO'
+    ) THEN
+      ALTER TABLE conexion_alfa_respuestas ALTER COLUMN nombre DROP NOT NULL;
+    END IF;
+  END IF;
+END$$;
+""")
 
     # ========= Conexión Alfa: matches (renombra/crea columnas si faltan) =========
     execute("""
@@ -296,7 +348,7 @@ END$$;
     execute("CREATE INDEX IF NOT EXISTS idx_ca_j1 ON conexion_alfa_matches(jugador_1_id)")
     execute("CREATE INDEX IF NOT EXISTS idx_ca_j2 ON conexion_alfa_matches(jugador_2_id)")
 
-# Llamadas de inicialización (ya existe DDL arriba)
+# 👇 Inicialización
 ensure_schema()
 normalize_schema()
 
@@ -348,11 +400,9 @@ def home():
 def index_page():
     me = session["jugador_id"]
     ya_respondio = bool(get_respuestas(me))
-
     # asegura tablas de conexión alfa y calcula flags
     _ensure_tablas_conexion_alfa()
     alfa_ya = bool(query("SELECT 1 FROM conexion_alfa_respuestas WHERE jugador_id=%s", (me,)))
-
     return render_template(
         "index.html",
         nombre=session.get("nombre", ""),
