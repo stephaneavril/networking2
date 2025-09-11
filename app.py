@@ -312,18 +312,20 @@ CAMPOS_JUEGO = ["r2","r3","r4","r6","r9"]  # 5 preguntas/respuestas usadas en el
 
 import random  # arriba del archivo si no lo tienes
 
+import random
+
 def _participantes_para_juego(mi_id: int, n: int = 5):
     rows = query("""
-      SELECT j.id, j.nombre, r.r2, r.r3, r.r4, r.r6, r.r8, r.r9, r.r10, r.r12, r.r13
-      FROM jugadores j
-      JOIN formulario_respuestas r ON r.jugador_id=j.id
-      WHERE j.id <> %s
+        SELECT j.id, j.nombre,
+               r.r2, r.r3, r.r4, r.r6, r.r8, r.r9, r.r10, r.r12, r.r13
+        FROM jugadores j
+        JOIN formulario_respuestas r ON r.jugador_id = j.id
+        WHERE j.id <> %s
     """, (mi_id,))
 
-    # baraja y recorta a 5 (si hay menos, usa los que haya)
+    # Baraja y recorta a n (máx 5 por default)
     random.shuffle(rows)
-    if len(rows) > n:
-        rows = rows[:n]
+    rows = rows[:n] if len(rows) > n else rows
 
     campos = [
         ("🎶 Pasión", "r2"),
@@ -343,7 +345,9 @@ def _participantes_para_juego(mi_id: int, n: int = 5):
         for label, key in campos:
             val = x.get(key)
             if val:
-                disponibles.append({"label": label, "text": val})
+                txt = val.strip() if isinstance(val, str) else str(val)
+                if txt:
+                    disponibles.append({"label": label, "text": txt})
         random.shuffle(disponibles)
         pistas = disponibles[:3] if len(disponibles) >= 3 else disponibles
         out.append({"id": x["id"], "nombre": x["nombre"], "pistas": pistas})
@@ -360,7 +364,7 @@ def adivina():
 
     participantes = session.get("adivina_set")
     if not participantes:
-        participantes = _participantes_para_juego(me, n=5)
+        participantes = _participantes_para_juego(me)
         session["adivina_set"] = participantes  # congelar la selección de esta partida
 
     return render_template(
