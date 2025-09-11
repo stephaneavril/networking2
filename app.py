@@ -101,49 +101,16 @@ def query(sql: str, params: Tuple = ()):
     return []
 
 # ─────────────────────────────────────────────────────────────
-# Esquema + normalización
+# Esquema + normalización (pegar esto justo después de DDL)
 # ─────────────────────────────────────────────────────────────
-DDL = """
-CREATE TABLE IF NOT EXISTS jugadores (
-  id SERIAL PRIMARY KEY,
-  nombre TEXT NOT NULL,
-  correo TEXT NOT NULL UNIQUE,
-  created_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS formulario_respuestas (
-  jugador_id INTEGER PRIMARY KEY REFERENCES jugadores(id) ON DELETE CASCADE,
-  r2  TEXT,  -- pasión
-  r3  TEXT,  -- dato curioso
-  r4  TEXT,  -- película favorita
-  r6  TEXT,  -- deporte favorito
-  r8  TEXT,  -- prenda imprescindible
-  r9  TEXT,  -- mejor concierto
-  r10 TEXT,  -- libro/arte favorito
-  r12 TEXT,  -- mascota
-  r13 TEXT,  -- hijos
-  created_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
--- una sola marca de finalización por jugador
-CREATE TABLE IF NOT EXISTS adivina_scores (
-  jugador_id INTEGER PRIMARY KEY REFERENCES jugadores(id) ON DELETE CASCADE,
-  aciertos INTEGER NOT NULL DEFAULT 0,
-  rondas   INTEGER NOT NULL DEFAULT 0,
-  fallos   INTEGER NOT NULL DEFAULT 0,
-  puntos_base  INTEGER NOT NULL DEFAULT 0,
-  puntos_bonus INTEGER NOT NULL DEFAULT 0,
-  puntos_total INTEGER NOT NULL DEFAULT 0,
-  created_at TIMESTAMP NOT NULL DEFAULT NOW()
-);
-
--- control de activación de retos
-CREATE TABLE IF NOT EXISTS retos (
-  id SERIAL PRIMARY KEY,
-  nombre TEXT UNIQUE NOT NULL,
-  activo BOOLEAN NOT NULL DEFAULT FALSE
-);
-"""
+def ensure_schema():
+    for stmt in [s.strip() for s in DDL.split(";") if s.strip()]:
+        execute(stmt + ";")
+    # seeds
+    execute("INSERT INTO retos (nombre,activo) VALUES ('Adivina Quién', FALSE) ON CONFLICT (nombre) DO NOTHING;")
+    execute("INSERT INTO retos (nombre,activo) VALUES ('Conexión Alfa', FALSE) ON CONFLICT (nombre) DO NOTHING;")
+    for nombre in ('MI6 v1', 'MI6 v2', 'MI6 v3'):
+        execute("INSERT INTO retos (nombre,activo) VALUES (%s, FALSE) ON CONFLICT (nombre) DO NOTHING;", (nombre,))
 
 def normalize_schema():
     # ---- Adivina: columnas defensivas ----
@@ -174,7 +141,7 @@ $do$;
     execute(sql)
 
     # ========= 🔧 FIX Conexión Alfa =========
-    # 1) Asegura que exista la tabla de respuestas (con jugador_id)
+    # 1) Asegura que exista la tabla (con jugador_id)
     execute("""
         CREATE TABLE IF NOT EXISTS conexion_alfa_respuestas (
             jugador_id INTEGER,
@@ -183,7 +150,7 @@ $do$;
         );
     """)
 
-    # 2) Si antes creaste la tabla con 'id' (y no 'jugador_id'), migra sin perder datos
+    # 2) Si antes existía una columna 'id', migra a 'jugador_id' y añade índice único
     execute(r"""
 DO $$
 BEGIN
@@ -195,12 +162,14 @@ BEGIN
     ALTER TABLE conexion_alfa_respuestas ADD COLUMN jugador_id INTEGER;
   END IF;
 
-  -- si existe columna 'id', copia sus valores a jugador_id donde esté NULL
+  -- migra desde 'id' si existía
   IF EXISTS (
     SELECT 1 FROM information_schema.columns
     WHERE table_name='conexion_alfa_respuestas' AND column_name='id'
   ) THEN
-    UPDATE conexion_alfa_respuestas SET jugador_id = id WHERE jugador_id IS NULL;
+    UPDATE conexion_alfa_respuestas
+       SET jugador_id = id
+     WHERE jugador_id IS NULL;
   END IF;
 
   -- índice único para ON CONFLICT (jugador_id)
@@ -213,7 +182,7 @@ BEGIN
 END $$;
 """)
 
-    # 3) (Opcional pero recomendable) asegurar la tabla de matches
+    # 3) Asegura la tabla de matches e índices
     execute("""
         CREATE TABLE IF NOT EXISTS conexion_alfa_matches (
             id SERIAL PRIMARY KEY,
@@ -229,7 +198,7 @@ END $$;
     execute("CREATE INDEX IF NOT EXISTS idx_ca_j1 ON conexion_alfa_matches(jugador_1_id)")
     execute("CREATE INDEX IF NOT EXISTS idx_ca_j2 ON conexion_alfa_matches(jugador_2_id)")
 
-
+# 👇 Llama aquí, inmediatamente DESPUÉS de definir las funciones
 ensure_schema()
 normalize_schema()
 
