@@ -150,6 +150,7 @@ def ensure_schema():
         execute(stmt + ";")
     # seeds
     execute("INSERT INTO retos (nombre,activo) VALUES ('Adivina Quién', FALSE) ON CONFLICT (nombre) DO NOTHING;")
+    execute("INSERT INTO retos (nombre,activo) VALUES ('Conexión Alfa', FALSE) ON CONFLICT (nombre) DO NOTHING;")
     for nombre in ('MI6 v1', 'MI6 v2', 'MI6 v3'):
         execute("INSERT INTO retos (nombre,activo) VALUES (%s, FALSE) ON CONFLICT (nombre) DO NOTHING;", (nombre,))
 
@@ -182,6 +183,7 @@ $do$;
 
 ensure_schema()
 normalize_schema()
+
 
 # ─────────────────────────────────────────────────────────────
 # Utils
@@ -231,11 +233,22 @@ def home():
 def index_page():
     me = session["jugador_id"]
     ya_respondio = bool(get_respuestas(me))
+
+    # asegura tablas de conexión alfa y calcula flags
+    try:
+        ensure_tablas_conexion_alfa()  # si ya lo tienes definido más abajo, no dupliques la función
+    except NameError:
+        pass  # si no está definida todavía, no pasa nada
+
+    alfa_ya = bool(query("SELECT 1 FROM conexion_alfa_respuestas WHERE jugador_id=%s", (me,)))
+    
     return render_template(
         "index.html",
         nombre=session.get("nombre", ""),
         ya_respondio=ya_respondio,
         adivina_activo=reto_activo("Adivina Quién"),
+        conexion_alfa_activo=reto_activo("Conexión Alfa"),
+        alfa_ya=alfa_ya,
         show_admin=session.get("is_admin", False)
     )
 
@@ -254,7 +267,7 @@ def login_route():
     session["correo"] = jugador["correo"]
     if not get_respuestas(jugador["id"]):
         return redirect(url_for("preguntas_post_login"))
-    return redirect(url_for("adivina"))
+    return redirect(url_for("index_page"))
 
 @app.route("/logout")
 def logout():
@@ -311,7 +324,7 @@ def preguntas_post_login():
         """, (jugador_id, *valores))
 
     flash("¡Gracias! Tus respuestas fueron guardadas.")
-    return redirect(url_for("adivina"))
+    return redirect(url_for("index_page"))
 
 # ─────────────────────────────────────────────────────────────
 # Juego Adivina Quién

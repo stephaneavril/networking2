@@ -6,7 +6,8 @@
   <title>Inicio</title>
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial;background:#0b0b0f;color:#eaeaf2;margin:0;padding:24px}
-    .card{max-width:720px;margin:0 auto;background:#13131a;border:1px solid #242433;border-radius:16px;padding:24px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+    .wrap{max-width:960px;margin:0 auto}
+    .card{background:#13131a;border:1px solid #242433;border-radius:16px;padding:24px;box-shadow:0 10px 30px rgba(0,0,0,.35);margin-bottom:16px}
     .row{display:flex;gap:12px;flex-wrap:wrap}
     .btn{appearance:none;border:1px solid #3a3a4d;background:#1e1e2a;color:#fff;padding:12px 16px;border-radius:12px;text-decoration:none;display:inline-block}
     .btn:hover{background:#2a2a3a}
@@ -14,35 +15,78 @@
     .btn.primary:hover{background:#2f59c6}
     .muted{color:#a9a9ba}.ok{color:#4ade80}.warn{color:#fbbf24}
     hr{border:none;border-top:1px solid #242433;margin:20px 0}
+    h2{margin:0 0 10px 0}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+    .badge{display:inline-block;padding:4px 8px;border-radius:999px;font-size:.85rem;border:1px solid #2a2a3a;background:#161622;color:#cbd5e1}
+    .badge.on{border-color:#1f6feb;background:#11253f;color:#93c5fd}
   </style>
 </head>
 <body>
+<div class="wrap">
   <div class="card">
     <h1>Hola, {{ nombre or "Jugador/a" }} 👋</h1>
-
+    <p class="muted">Selecciona un reto activo para continuar.</p>
+    <div class="row">
+      <span class="badge {{ 'on' if adivina_activo else '' }}">Adivina Quién: {{ 'Activo' if adivina_activo else 'Inactivo' }}</span>
+      <span class="badge {{ 'on' if conexion_alfa_activo else '' }}">Conexión Alfa: {{ 'Activo' if conexion_alfa_activo else 'Inactivo' }}</span>
+    </div>
+    <hr>
     {% if not ya_respondio %}
-      <p class="muted">Para poder jugar, primero completa tus preguntas.</p>
+      <p class="warn">⚠️ Para jugar <b>Adivina Quién</b>, primero completa tus preguntas.</p>
       <div class="row">
         <a class="btn primary" href="{{ url_for('preguntas_post_login') }}">Responder preguntas</a>
       </div>
-    {% else %}
-      {% if adivina_activo %}
-        <p class="ok">✅ Adivina Quién está activo.</p>
-        <div class="row">
-          <a class="btn primary" href="{{ url_for('adivina') }}">Jugar Adivina Quién</a>
-        </div>
-      {% else %}
-        <p class="warn">⏳ El administrador aún no ha activado Adivina Quién.</p>
-        <div class="row">
-          <a class="btn" href="{{ url_for('preguntas_post_login') }}">Editar mis respuestas</a>
-        </div>
-      {% endif %}
     {% endif %}
+  </div>
 
-    <hr>
+  <div class="grid">
+    <!-- Tarjeta Adivina Quién -->
+    <div class="card">
+      <h2>🕵️ Adivina Quién</h2>
+      {% if adivina_activo %}
+        {% if ya_respondio %}
+          <p class="ok">✅ Listo para jugar. Selección aleatoria de 5 personas (no te incluye).</p>
+          <div class="row">
+            <a class="btn primary" href="{{ url_for('adivina') }}">Jugar ahora</a>
+          </div>
+        {% else %}
+          <p class="muted">Completa tus respuestas para poder jugar.</p>
+          <div class="row">
+            <a class="btn" href="{{ url_for('preguntas_post_login') }}">Completar respuestas</a>
+          </div>
+        {% endif %}
+      {% else %}
+        <p class="muted">⏳ El administrador aún no ha activado este reto.</p>
+      {% endif %}
+    </div>
+
+    <!-- Tarjeta Conexión Alfa -->
+    <div class="card">
+      <h2>🧩 Conexión Alfa</h2>
+      {% if conexion_alfa_activo %}
+        {% if alfa_ya %}
+          <p class="ok">✅ Perfil listo. Puedes ver tu perfil y tu match.</p>
+          <div class="row">
+            <a class="btn" href="{{ url_for('conexion_alfa_mi_perfil') }}">Ver mi perfil</a>
+            <a class="btn primary" href="{{ url_for('conexion_alfa_mi_match') }}">Ver mi match</a>
+          </div>
+        {% else %}
+          <p class="muted">Completa tu perfil de Conexión Alfa para recibir un match cuando el admin genere emparejamientos.</p>
+          <div class="row">
+            <a class="btn primary" href="{{ url_for('conexion_alfa_form') }}">Completar perfil</a>
+          </div>
+        {% endif %}
+      {% else %}
+        <p class="muted">⏳ El administrador aún no ha activado este reto.</p>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card">
     <div class="row">
       <a class="btn" href="{{ url_for('logout') }}">Cerrar sesión</a>
     </div>
   </div>
+</div>
 </body>
 </html>
