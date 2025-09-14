@@ -6,7 +6,7 @@ import re
 import math
 import time
 from functools import wraps
-from typing import Tuple, Optional
+from typing import Tuple
 from collections import Counter
 from difflib import SequenceMatcher
 from threading import Lock
@@ -68,18 +68,17 @@ def db_connect():
         cursor_factory=psycopg2.extras.RealDictCursor
     )
 
-def execute(sql: str, params: Optional[Tuple] = None):
-    """Ejecuta SQL con reintento. No pasa params si son None para evitar conflictos con % en SQL."""
+def execute(sql: str, params: Tuple = ()):
     for _ in (1, 2):
         conn = None
         try:
             conn = db_connect()
             conn.autocommit = True
             with conn.cursor() as cur:
-                if params is None:
-                    cur.execute(sql)
-                else:
+                if params:
                     cur.execute(sql, params)
+                else:
+                    cur.execute(sql)
             return
         except (psycopg2.OperationalError, psycopg2.InterfaceError):
             if conn: conn.close()
@@ -87,17 +86,16 @@ def execute(sql: str, params: Optional[Tuple] = None):
         finally:
             if conn: conn.close()
 
-def query(sql: str, params: Optional[Tuple] = None):
-    """Consulta con reintento. Igual que execute: no pasa params si son None."""
+def query(sql: str, params: Tuple = ()):
     for _ in (1, 2):
         conn = None
         try:
             conn = db_connect()
             with conn.cursor() as cur:
-                if params is None:
-                    cur.execute(sql)
-                else:
+                if params:
                     cur.execute(sql, params)
+                else:
+                    cur.execute(sql)
                 if cur.description:
                     return cur.fetchall()
                 return []
@@ -163,7 +161,7 @@ def ensure_schema():
     for nombre in ('MI6 v1', 'MI6 v2', 'MI6 v3'):
         execute("INSERT INTO retos (nombre,activo) VALUES (%s, FALSE) ON CONFLICT (nombre) DO NOTHING;", (nombre,))
 
-ddef normalize_schema():
+def normalize_schema():
     # ---- Adivina: columnas defensivas ----
     execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS rondas INTEGER NOT NULL DEFAULT 0;")
     execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS fallos INTEGER NOT NULL DEFAULT 0;")
@@ -192,7 +190,7 @@ $do$;
     execute(sql)
 
     # ========= Conexión Alfa: respuestas (migración robusta) =========
-    -- 1) Garantiza existencia sin pisar estructura previa
+    # 1) Garantiza existencia sin pisar estructura previa
     execute("CREATE TABLE IF NOT EXISTS conexion_alfa_respuestas (jugador_id INTEGER)")
 
     # 2) Asegura columna jugador_id y backfill desde posible 'id'
@@ -230,7 +228,7 @@ END$$;
         ON conexion_alfa_respuestas(jugador_id)
     """)
 
-    # 6) Migración segura de PK / columnas legadas
+    # 6) Migración segura de PK / columnas legadas (sin placeholders en RAISE)
     execute(r"""
 DO $$DECLARE
   pk_name text;
@@ -276,7 +274,6 @@ BEGIN
       BEGIN
         ALTER TABLE conexion_alfa_respuestas ADD CONSTRAINT conexion_alfa_respuestas_pkey_jid PRIMARY KEY (jugador_id);
       EXCEPTION WHEN duplicate_object THEN
-        -- Ya existía una PK con ese nombre; seguimos
         PERFORM 1;
       END;
 
@@ -293,7 +290,6 @@ BEGIN
         ALTER TABLE conexion_alfa_respuestas ALTER COLUMN correo DROP NOT NULL;
       END IF;
     ELSE
-      -- Evitamos placeholders % para no chocar con el parser de RAISE
       RAISE NOTICE USING MESSAGE = 'No se migra PK: ' || n_nulls::text || ' nulos en jugador_id. Revisa datos.';
     END IF;
   ELSE
@@ -383,7 +379,6 @@ END$$;
     # Índices
     execute("CREATE INDEX IF NOT EXISTS idx_ca_j1 ON conexion_alfa_matches(jugador_1_id)")
     execute("CREATE INDEX IF NOT EXISTS idx_ca_j2 ON conexion_alfa_matches(jugador_2_id)")
-
 
 # 👇 Inicialización
 ensure_schema()
@@ -527,7 +522,7 @@ def preguntas_post_login():
 # ─────────────────────────────────────────────────────────────
 # Juego Adivina Quién
 # ─────────────────────────────────────────────────────────────
-def _participantes_para_juego(mi_id: int, n: int = 5):
+def _participantes_para_juego(mi_id: int, n: int = 10):
     rows = query("""
         SELECT j.id, j.nombre,
                r.r2, r.r3, r.r4, r.r6, r.r8, r.r9, r.r10, r.r12, r.r13
@@ -574,7 +569,7 @@ def adivina():
     me = session["jugador_id"]
     participantes = session.get("adivina_set")
     if not participantes:
-        participantes = _participantes_para_juego(me, n=10)
+        participantes = _participantes_para_juego(me, n=10)  # máximo 10
         session["adivina_set"] = participantes
     return render_template(
         "adivina.html",
@@ -804,14 +799,15 @@ def _get_personas_con_perfil():
             if jrow:
                 if "nombre" not in jb: jb["nombre"] = jrow[0]["nombre"]
                 if "correo" not in jb: jb["correo"] = jrow[0]["correo"]
-        personas.append({
-            "id": pid,
-            "nombre": jb.get("nombre"),
-            "correo": jb.get("correo"),
-            "base": jb,
-            "extra": je
-        })
-    personas = [p for p in personas if _perfil_texto_agregado(p["base"], p["extra"]).strip()]
+        texto = _perfil_texto_agregado(jb, je)
+        if texto.strip():
+            personas.append({
+                "id": pid,
+                "nombre": jb.get("nombre"),
+                "correo": jb.get("correo"),
+                "base": jb,
+                "extra": je
+            })
     personas.sort(key=lambda x: x["id"])
     return personas
 
@@ -901,9 +897,11 @@ def conexion_alfa_form():
 def _perfil_ia_ligero(base_row, extra_row):
     piezas = []
     for k,label in ALFA_CAMPOS_BASE:
-        v = (base_row or {}).get(k);      piezas.append(f"• {label}: {v}.") if v else None
+        v = (base_row or {}).get(k)
+        if v: piezas.append(f"• {label}: {v}.")
     for k,label in ALFA_CAMPOS_EXTRA:
-        v = (extra_row or {}).get(k);     piezas.append(f"• {label}: {v}.") if v else None
+        v = (extra_row or {}).get(k)
+        if v: piezas.append(f"• {label}: {v}.")
     return "\n".join(piezas) or "Perfil en construcción."
 
 @app.route("/conexion_alfa_mi_perfil", methods=["GET"])
@@ -1088,8 +1086,7 @@ def conexion_alfa_emparejamientos():
             LIMIT 1
         """, (a,b))
         if not m: continue
-        m = m[0]
-        matches.append(m)
+        matches.append(m[0])
 
     fb_vals = [m["feedback"] for m in matches if m["feedback"] is not None]
     if fb_vals:
