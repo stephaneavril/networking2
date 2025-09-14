@@ -154,7 +154,6 @@ def ensure_schema():
     execute("INSERT INTO retos (nombre,activo) VALUES ('Conexión Alfa', FALSE) ON CONFLICT (nombre) DO NOTHING;")
     for nombre in ('MI6 v1', 'MI6 v2', 'MI6 v3'):
         execute("INSERT INTO retos (nombre,activo) VALUES (%s, FALSE) ON CONFLICT (nombre) DO NOTHING;", (nombre,))
-
 def normalize_schema():
     # ---- Adivina: columnas defensivas ----
     execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS rondas INTEGER NOT NULL DEFAULT 0;")
@@ -184,10 +183,10 @@ $do$;
     execute(sql)
 
     # ========= Conexión Alfa: respuestas (migración robusta) =========
-    # 1) Garantiza que la tabla exista (no pisa estructura previa)
+    # 1) Garantiza existencia sin pisar estructura previa
     execute("CREATE TABLE IF NOT EXISTS conexion_alfa_respuestas (jugador_id INTEGER)")
 
-    # 2) Asegura la clave jugador_id y migra desde posible 'id'
+    # 2) Asegura columna jugador_id y backfill desde posible 'id'
     execute(r"""
 DO $$BEGIN
   IF NOT EXISTS (
@@ -216,29 +215,81 @@ END$$;
     execute("ALTER TABLE conexion_alfa_respuestas ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();")
     execute("ALTER TABLE conexion_alfa_respuestas ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();")
 
-    # 5) Índice único por jugador para ON CONFLICT (jugador_id)
+    # 5) Índice único (temporal si aún no migramos PK). No estorba si luego hay PK.
     execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS ux_ca_respuestas_jugador_id
         ON conexion_alfa_respuestas(jugador_id)
     """)
 
-    # 6) 🛠️ Limpieza de columnas legadas (correo/nombre) que puedan estar NOT NULL en instalaciones antiguas
+    # 6) Migración segura de PK: si 'correo' es PK, pásala a 'jugador_id'
     execute(r"""
-DO $$BEGIN
-  -- correo
-  IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name='conexion_alfa_respuestas' AND column_name='correo'
-  ) THEN
-    -- Backfill desde jugadores
+DO $$DECLARE
+  pk_name text;
+  n_nulls int;
+BEGIN
+  -- Backfill de 'correo'/'nombre' desde jugadores si existen las columnas
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_respuestas' AND column_name='correo') THEN
     EXECUTE $SQL$
       UPDATE conexion_alfa_respuestas car
-      SET correo = j.correo
-      FROM jugadores j
-      WHERE car.jugador_id = j.id AND (car.correo IS NULL OR car.correo='')
+         SET correo = j.correo
+        FROM jugadores j
+       WHERE car.jugador_id = j.id
+         AND (car.correo IS NULL OR car.correo = '')
     $SQL$;
+  END IF;
 
-    -- Quitar NOT NULL si lo tuviera
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_respuestas' AND column_name='nombre') THEN
+    EXECUTE $SQL$
+      UPDATE conexion_alfa_respuestas car
+         SET nombre = j.nombre
+        FROM jugadores j
+       WHERE car.jugador_id = j.id
+         AND (car.nombre IS NULL OR car.nombre = '')
+    $SQL$;
+  END IF;
+
+  -- ¿La PK actual está en 'correo'?
+  SELECT c.conname INTO pk_name
+  FROM pg_constraint c
+  JOIN pg_class t ON t.oid = c.conrelid
+  JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
+  WHERE c.contype = 'p' AND t.relname = 'conexion_alfa_respuestas' AND a.attname = 'correo'
+  LIMIT 1;
+
+  IF pk_name IS NOT NULL THEN
+    -- Antes de mover la PK, asegúrate de que jugador_id está completo
+    SELECT COUNT(*) INTO n_nulls
+    FROM conexion_alfa_respuestas
+    WHERE jugador_id IS NULL;
+
+    IF n_nulls = 0 THEN
+      -- Crea nueva PK en jugador_id si no existe ya alguna PK equivalente
+      BEGIN
+        ALTER TABLE conexion_alfa_respuestas ADD CONSTRAINT conexion_alfa_respuestas_pkey_jid PRIMARY KEY (jugador_id);
+      EXCEPTION WHEN duplicate_table THEN
+        -- Ya existía una PK con ese nombre; seguimos
+      WHEN unique_violation THEN
+        -- Hay duplicados en jugador_id; no migramos (dejar aviso)
+        RAISE NOTICE 'No se pudo crear PK en jugador_id por duplicados.';
+      END;
+
+      -- Quita la PK anterior basada en correo
+      EXECUTE format('ALTER TABLE conexion_alfa_respuestas DROP CONSTRAINT %I', pk_name);
+
+      -- Ahora sí, si 'correo' estaba NOT NULL, se puede relajar
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='conexion_alfa_respuestas'
+          AND column_name='correo'
+          AND is_nullable='NO'
+      ) THEN
+        ALTER TABLE conexion_alfa_respuestas ALTER COLUMN correo DROP NOT NULL;
+      END IF;
+    ELSE
+      RAISE NOTICE 'No se migra PK: % nulos en jugador_id. Revisa datos.', n_nulls;
+    END IF;
+  ELSE
+    -- Si 'correo' NO es PK: relaja NOT NULL solo si aún está marcado
     IF EXISTS (
       SELECT 1
       FROM information_schema.columns
@@ -246,30 +297,16 @@ DO $$BEGIN
         AND column_name='correo'
         AND is_nullable='NO'
     ) THEN
-      ALTER TABLE conexion_alfa_respuestas ALTER COLUMN correo DROP NOT NULL;
-    END IF;
-  END IF;
-
-  -- nombre
-  IF EXISTS (
-    SELECT 1 FROM information_schema.columns
-    WHERE table_name='conexion_alfa_respuestas' AND column_name='nombre'
-  ) THEN
-    EXECUTE $SQL$
-      UPDATE conexion_alfa_respuestas car
-      SET nombre = j.nombre
-      FROM jugadores j
-      WHERE car.jugador_id = j.id AND (car.nombre IS NULL OR car.nombre='')
-    $SQL$;
-
-    IF EXISTS (
-      SELECT 1
-      FROM information_schema.columns
-      WHERE table_name='conexion_alfa_respuestas'
-        AND column_name='nombre'
-        AND is_nullable='NO'
-    ) THEN
-      ALTER TABLE conexion_alfa_respuestas ALTER COLUMN nombre DROP NOT NULL;
+      -- doble verificación: 'correo' no participa en la PK
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint c
+        JOIN pg_class t ON t.oid = c.conrelid
+        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
+        WHERE c.contype = 'p' AND t.relname = 'conexion_alfa_respuestas' AND a.attname = 'correo'
+      ) THEN
+        ALTER TABLE conexion_alfa_respuestas ALTER COLUMN correo DROP NOT NULL;
+      END IF;
     END IF;
   END IF;
 END$$;
