@@ -6,7 +6,7 @@ import re
 import math
 import time
 from functools import wraps
-from typing import Tuple
+from typing import Tuple, Optional
 from collections import Counter
 from difflib import SequenceMatcher
 from threading import Lock
@@ -68,14 +68,18 @@ def db_connect():
         cursor_factory=psycopg2.extras.RealDictCursor
     )
 
-def execute(sql: str, params: Tuple = ()):
+def execute(sql: str, params: Optional[Tuple] = None):
+    """Ejecuta SQL con reintento. No pasa params si son None para evitar conflictos con % en SQL."""
     for _ in (1, 2):
         conn = None
         try:
             conn = db_connect()
             conn.autocommit = True
             with conn.cursor() as cur:
-                cur.execute(sql, params)
+                if params is None:
+                    cur.execute(sql)
+                else:
+                    cur.execute(sql, params)
             return
         except (psycopg2.OperationalError, psycopg2.InterfaceError):
             if conn: conn.close()
@@ -83,13 +87,17 @@ def execute(sql: str, params: Tuple = ()):
         finally:
             if conn: conn.close()
 
-def query(sql: str, params: Tuple = ()):
+def query(sql: str, params: Optional[Tuple] = None):
+    """Consulta con reintento. Igual que execute: no pasa params si son None."""
     for _ in (1, 2):
         conn = None
         try:
             conn = db_connect()
             with conn.cursor() as cur:
-                cur.execute(sql, params)
+                if params is None:
+                    cur.execute(sql)
+                else:
+                    cur.execute(sql, params)
                 if cur.description:
                     return cur.fetchall()
                 return []
@@ -154,6 +162,7 @@ def ensure_schema():
     execute("INSERT INTO retos (nombre,activo) VALUES ('Conexión Alfa', FALSE) ON CONFLICT (nombre) DO NOTHING;")
     for nombre in ('MI6 v1', 'MI6 v2', 'MI6 v3'):
         execute("INSERT INTO retos (nombre,activo) VALUES (%s, FALSE) ON CONFLICT (nombre) DO NOTHING;", (nombre,))
+
 def normalize_schema():
     # ---- Adivina: columnas defensivas ----
     execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS rondas INTEGER NOT NULL DEFAULT 0;")
@@ -222,6 +231,7 @@ END$$;
     """)
 
     # 6) Migración segura de PK: si 'correo' es PK, pásala a 'jugador_id'
+    #    Nota: se escapan % como %% para que psycopg2 no los intente interpretar.
     execute(r"""
 DO $$DECLARE
   pk_name text;
@@ -274,7 +284,7 @@ BEGIN
       END;
 
       -- Quita la PK anterior basada en correo
-      EXECUTE format('ALTER TABLE conexion_alfa_respuestas DROP CONSTRAINT %I', pk_name);
+      EXECUTE format('ALTER TABLE conexion_alfa_respuestas DROP CONSTRAINT %%I', pk_name);
 
       -- Ahora sí, si 'correo' estaba NOT NULL, se puede relajar
       IF EXISTS (
@@ -286,7 +296,7 @@ BEGIN
         ALTER TABLE conexion_alfa_respuestas ALTER COLUMN correo DROP NOT NULL;
       END IF;
     ELSE
-      RAISE NOTICE 'No se migra PK: % nulos en jugador_id. Revisa datos.', n_nulls;
+      RAISE NOTICE 'No se migra PK: %% nulos en jugador_id. Revisa datos.', n_nulls;
     END IF;
   ELSE
     -- Si 'correo' NO es PK: relaja NOT NULL solo si aún está marcado
