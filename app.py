@@ -163,7 +163,7 @@ def ensure_schema():
     for nombre in ('MI6 v1', 'MI6 v2', 'MI6 v3'):
         execute("INSERT INTO retos (nombre,activo) VALUES (%s, FALSE) ON CONFLICT (nombre) DO NOTHING;", (nombre,))
 
-def normalize_schema():
+ddef normalize_schema():
     # ---- Adivina: columnas defensivas ----
     execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS rondas INTEGER NOT NULL DEFAULT 0;")
     execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS fallos INTEGER NOT NULL DEFAULT 0;")
@@ -192,7 +192,7 @@ $do$;
     execute(sql)
 
     # ========= Conexión Alfa: respuestas (migración robusta) =========
-    # 1) Garantiza existencia sin pisar estructura previa
+    -- 1) Garantiza existencia sin pisar estructura previa
     execute("CREATE TABLE IF NOT EXISTS conexion_alfa_respuestas (jugador_id INTEGER)")
 
     # 2) Asegura columna jugador_id y backfill desde posible 'id'
@@ -224,14 +224,13 @@ END$$;
     execute("ALTER TABLE conexion_alfa_respuestas ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();")
     execute("ALTER TABLE conexion_alfa_respuestas ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();")
 
-    # 5) Índice único (temporal si aún no migramos PK). No estorba si luego hay PK.
+    # 5) Índice único (aunque luego haya PK)
     execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS ux_ca_respuestas_jugador_id
         ON conexion_alfa_respuestas(jugador_id)
     """)
 
-    # 6) Migración segura de PK: si 'correo' es PK, pásala a 'jugador_id'
-    #    Nota: se escapan % como %% para que psycopg2 no los intente interpretar.
+    # 6) Migración segura de PK / columnas legadas
     execute(r"""
 DO $$DECLARE
   pk_name text;
@@ -273,20 +272,18 @@ BEGIN
     WHERE jugador_id IS NULL;
 
     IF n_nulls = 0 THEN
-      -- Crea nueva PK en jugador_id si no existe ya alguna PK equivalente
+      -- Crea nueva PK en jugador_id (si no existe)
       BEGIN
         ALTER TABLE conexion_alfa_respuestas ADD CONSTRAINT conexion_alfa_respuestas_pkey_jid PRIMARY KEY (jugador_id);
-      EXCEPTION WHEN duplicate_table THEN
+      EXCEPTION WHEN duplicate_object THEN
         -- Ya existía una PK con ese nombre; seguimos
-      WHEN unique_violation THEN
-        -- Hay duplicados en jugador_id; no migramos (dejar aviso)
-        RAISE NOTICE 'No se pudo crear PK en jugador_id por duplicados.';
+        PERFORM 1;
       END;
 
       -- Quita la PK anterior basada en correo
-      EXECUTE format('ALTER TABLE conexion_alfa_respuestas DROP CONSTRAINT %%I', pk_name);
+      EXECUTE format('ALTER TABLE conexion_alfa_respuestas DROP CONSTRAINT %I', pk_name);
 
-      -- Ahora sí, si 'correo' estaba NOT NULL, se puede relajar
+      -- Relaja NOT NULL en correo si todavía lo tiene y ya no es PK
       IF EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_name='conexion_alfa_respuestas'
@@ -296,10 +293,11 @@ BEGIN
         ALTER TABLE conexion_alfa_respuestas ALTER COLUMN correo DROP NOT NULL;
       END IF;
     ELSE
-      RAISE NOTICE 'No se migra PK: %% nulos en jugador_id. Revisa datos.', n_nulls;
+      -- Evitamos placeholders % para no chocar con el parser de RAISE
+      RAISE NOTICE USING MESSAGE = 'No se migra PK: ' || n_nulls::text || ' nulos en jugador_id. Revisa datos.';
     END IF;
   ELSE
-    -- Si 'correo' NO es PK: relaja NOT NULL solo si aún está marcado
+    -- Si 'correo' NO es PK: relaja NOT NULL sólo si aún está marcado y no participa en la PK
     IF EXISTS (
       SELECT 1
       FROM information_schema.columns
@@ -307,7 +305,6 @@ BEGIN
         AND column_name='correo'
         AND is_nullable='NO'
     ) THEN
-      -- doble verificación: 'correo' no participa en la PK
       IF NOT EXISTS (
         SELECT 1
         FROM pg_constraint c
@@ -364,36 +361,29 @@ DO $$BEGIN
     END IF;
   END IF;
 
-  -- score / razon_match / evidencia / feedback
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_matches' AND column_name='score'
-  ) THEN
+  -- demás columnas
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_matches' AND column_name='score') THEN
     ALTER TABLE conexion_alfa_matches ADD COLUMN score FLOAT NOT NULL DEFAULT 0;
   END IF;
 
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_matches' AND column_name='razon_match'
-  ) THEN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_matches' AND column_name='razon_match') THEN
     ALTER TABLE conexion_alfa_matches ADD COLUMN razon_match TEXT;
   END IF;
 
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_matches' AND column_name='evidencia'
-  ) THEN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_matches' AND column_name='evidencia') THEN
     ALTER TABLE conexion_alfa_matches ADD COLUMN evidencia TEXT;
   END IF;
 
-  IF NOT EXISTS (
-    SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_matches' AND column_name='feedback'
-  ) THEN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_matches' AND column_name='feedback') THEN
     ALTER TABLE conexion_alfa_matches ADD COLUMN feedback SMALLINT;
   END IF;
 END$$;
 """)
 
-    # Índices (ya existen las columnas)
+    # Índices
     execute("CREATE INDEX IF NOT EXISTS idx_ca_j1 ON conexion_alfa_matches(jugador_1_id)")
     execute("CREATE INDEX IF NOT EXISTS idx_ca_j2 ON conexion_alfa_matches(jugador_2_id)")
+
 
 # 👇 Inicialización
 ensure_schema()
@@ -584,7 +574,7 @@ def adivina():
     me = session["jugador_id"]
     participantes = session.get("adivina_set")
     if not participantes:
-        participantes = _participantes_para_juego(me)
+        participantes = _participantes_para_juego(me, n=10)
         session["adivina_set"] = participantes
     return render_template(
         "adivina.html",
