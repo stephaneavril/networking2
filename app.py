@@ -492,8 +492,11 @@ def index_page():
     # Adivina Quién
     adivina = reto_activo("Adivina Quién")
 
-    # >>> Reto Foto (NUEVO): busca si hay un challenge activo
+    # >>> Reto Foto (activo por photo_challenges o por flag legado 'retos')
     foto_activo = get_active_photo_challenge()
+    if not foto_activo:
+        foto_activo = ensure_default_photo_challenge_from_legacy_flag()
+
     mi_foto = None
     if foto_activo:
         mi_foto = query(
@@ -510,8 +513,7 @@ def index_page():
         conexion_alfa_activo=reto_activo("Conexión Alfa"),
         alfa_ya=alfa_ya,
         show_admin=session.get("is_admin", False),
-
-        # >>> añade estas dos variables:
+        # ← IMPORTANTE: pasar estas 2 variables
         foto_activo=foto_activo,
         mi_foto=mi_foto,
     )
@@ -813,6 +815,37 @@ def get_votes_map(ch_id: int):
         (ch_id,),
     )
     return {r["entry_id"]: int(r["c"]) for r in rows}
+
+def ensure_default_photo_challenge_from_legacy_flag():
+    """
+    Si el admin activó el reto legado 'Sube tu foto' en la tabla 'retos',
+    asegura que exista/esté activo un registro en 'photo_challenges'.
+    Devuelve el challenge activo o None.
+    """
+    ch = get_active_photo_challenge()
+    if ch:
+        return ch
+
+    # Puente con el flag legado
+    if reto_activo("Sube tu foto"):
+        # Si no hay ninguno, creamos uno por defecto y lo activamos
+        rows = query("SELECT id FROM photo_challenges ORDER BY created_at DESC LIMIT 1")
+        if not rows:
+            execute("""
+                INSERT INTO photo_challenges (titulo, descripcion, activo)
+                VALUES (%s,%s,TRUE)
+            """, ("Sube tu foto", "Comparte tu mejor foto con el equipo",))
+        else:
+            # Activar el último creado
+            execute("UPDATE photo_challenges SET activo=FALSE")
+            execute("""
+                UPDATE photo_challenges
+                   SET activo=TRUE
+                 WHERE id=(SELECT id FROM photo_challenges ORDER BY created_at DESC LIMIT 1)
+            """)
+        return get_active_photo_challenge()
+
+    return None
 
 # ─────────────────────────────────────────────────────────────
 # Reto Foto — Rutas de usuario
