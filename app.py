@@ -223,6 +223,7 @@ END$$;
         ON conexion_alfa_respuestas(jugador_id)
     """)
 
+    # Migración defensiva: mover PK a jugador_id y relajar NOT NULL en columnas legadas
     execute(r"""
 DO $$DECLARE
   pk_name text;
@@ -249,6 +250,7 @@ BEGIN
     $SQL$;
   END IF;
 
+  -- Detecta PK previa en 'correo'
   SELECT c.conname INTO pk_name
   FROM pg_constraint c
   JOIN pg_class t ON t.oid = c.conrelid
@@ -299,6 +301,29 @@ BEGIN
         ALTER TABLE conexion_alfa_respuestas ALTER COLUMN correo DROP NOT NULL;
       END IF;
     END IF;
+  END IF;
+END$$;
+""")
+
+    # Defensa extra: si todavía existen columnas legadas como NOT NULL, relájalas
+    execute(r"""
+DO $$BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='conexion_alfa_respuestas' AND column_name='correo'
+  ) THEN
+    BEGIN
+      ALTER TABLE conexion_alfa_respuestas ALTER COLUMN correo DROP NOT NULL;
+    EXCEPTION WHEN others THEN PERFORM 1; END;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name='conexion_alfa_respuestas' AND column_name='nombre'
+  ) THEN
+    BEGIN
+      ALTER TABLE conexion_alfa_respuestas ALTER COLUMN nombre DROP NOT NULL;
+    EXCEPTION WHEN others THEN PERFORM 1; END;
   END IF;
 END$$;
 """)
@@ -424,7 +449,7 @@ BEGIN
 END$$;
 """)
 
-    # Un voto máximo por foto y jugador, hasta 3 por reto
+    # Índices finales para votos/fotos
     execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS ux_photo_votes_one_per_entry
         ON photo_votes(challenge_id, jugador_id, entry_id);
@@ -1425,6 +1450,41 @@ def ver_fotos_equipo():
 @admin_required
 def generar_contenido_adivina():
     flash("Adivina Quién usa las respuestas actuales (no requiere pre-carga).")
+    return redirect(url_for("admin_panel"))
+@app.route("/admin/fix_conexion_alfa_schema")
+@admin_required
+def admin_fix_conexion_alfa_schema():
+    # Endurece el esquema legado que está causando el NOT NULL
+    execute(r"""
+    DO $$BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='conexion_alfa_respuestas' AND column_name='correo'
+      ) THEN
+        BEGIN
+          ALTER TABLE conexion_alfa_respuestas ALTER COLUMN correo DROP NOT NULL;
+        EXCEPTION WHEN others THEN PERFORM 1; END;
+      END IF;
+
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='conexion_alfa_respuestas' AND column_name='nombre'
+      ) THEN
+        BEGIN
+          ALTER TABLE conexion_alfa_respuestas ALTER COLUMN nombre DROP NOT NULL;
+        EXCEPTION WHEN others THEN PERFORM 1; END;
+      END IF;
+
+      -- Asegura PK correcta en jugador_id y no en correo
+      BEGIN
+        ALTER TABLE conexion_alfa_respuestas ADD CONSTRAINT ca_res_pk PRIMARY KEY (jugador_id);
+      EXCEPTION WHEN duplicate_object THEN PERFORM 1; END;
+
+      -- Si alguna vez quedó PK en correo, intenta removerla (safe)
+      PERFORM 1;
+    END$$;
+    """)
+    flash("Esquema de Conexión Alfa corregido. Vuelve a enviar el formulario.")
     return redirect(url_for("admin_panel"))
 
 # ─────────────────────────────────────────────────────────────

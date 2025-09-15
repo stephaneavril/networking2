@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Reto Foto — Galería</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial;background:#0b0b0f;color:#eaeaf2;margin:0;padding:24px}
+    .wrap{max-width:1100px;margin:0 auto}
+    .card{background:#13131a;border:1px solid #242433;border-radius:16px;padding:24px;box-shadow:0 10px 30px rgba(0,0,0,.35);margin-bottom:16px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}
+    .tile{background:#161622;border:1px solid #242433;border-radius:14px;padding:12px;display:flex;flex-direction:column;gap:10px}
+    .imgwrap{aspect-ratio:1/1;overflow:hidden;border-radius:10px;background:#0f0f16;display:flex;align-items:center;justify-content:center}
+    img{max-width:100%;max-height:100%;display:block}
+    .row{display:flex;gap:8px;flex-wrap:wrap}
+    .btn{appearance:none;border:1px solid #3a3a4d;background:#1e1e2a;color:#fff;padding:8px 12px;border-radius:10px;text-decoration:none;display:inline-block;cursor:pointer}
+    .btn:hover{background:#2a2a3a}
+    .btn.primary{background:#3a6df0;border-color:#3a6df0}
+    .btn.danger{background:#7a1f2b;border-color:#7a1f2b}
+    .muted{color:#a9a9ba}
+    .pill{display:inline-block;padding:4px 8px;border-radius:999px;border:1px solid #2a2a3a;background:#13131a}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>📸 Reto Foto — {{ reto.titulo }}</h1>
+    {% if reto.descripcion %}<p class="muted">{{ reto.descripcion }}</p>{% endif %}
+    <p class="muted">Tus votos usados: <b>{{ mis_votos }}</b> / <b>{{ votos_max }}</b></p>
+    <div class="row" style="margin-top:8px">
+      <a class="btn" href="{{ url_for('reto_foto_home') }}">Subir/Ver mi foto</a>
+      <a class="btn" href="{{ url_for('index_page') }}">Volver al inicio</a>
+    </div>
+  </div>
+
+  <div class="grid">
+    {% for e in entries %}
+      <div class="tile">
+        <div class="imgwrap">
+          <img loading="lazy" alt="Foto de {{ e.nombre }}"
+               src="{{ url_for('static', filename='fotos_ch/' ~ reto.id ~ '/' ~ e.filename) }}">
+        </div>
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <div><span class="pill">👤 {{ e.nombre }}</span></div>
+          <div><span class="pill">⭐ {{ votes_map.get(e.id, 0) }}</span></div>
+        </div>
+
+        {% set ya_votaste_esta = false %}
+        {% if session and session.get('jugador_id') %}
+          {# No sabemos aquí si ya votaste esta específica; el backend lo valida.
+             Mostramos ambos botones según reglas simples: #}
+          {% set ya_votaste_esta = False %}
+        {% endif %}
+
+        {% if e.jugador_id == session.get('jugador_id') %}
+          <p class="muted">No puedes votar tu propia foto.</p>
+        {% else %}
+          <div class="row">
+            {% if mis_votos < votos_max %}
+              <form method="post" action="{{ url_for('reto_foto_votar') }}">
+                <input type="hidden" name="entry_id" value="{{ e.id }}">
+                <button class="btn primary" type="submit">Votar ⭐</button>
+              </form>
+            {% else %}
+              <span class="muted">Has usado tus {{ votos_max }} votos.</span>
+            {% endif %}
+            <form method="post" action="{{ url_for('reto_foto_quitar_voto') }}">
+              <input type="hidden" name="entry_id" value="{{ e.id }}">
+              <button class="btn danger" type="submit">Quitar voto</button>
+            </form>
+          </div>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+</div>
+</body>
+</html>
