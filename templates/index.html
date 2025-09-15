@@ -59,6 +59,20 @@
         <p class="muted">⏳ El administrador aún no ha activado este reto.</p>
       {% endif %}
     </div>
+{% if foto_activo %}
+  <section class="card" style="margin-top:16px;padding:16px;background:#1b1b1b;border-radius:12px">
+    <h3>📸 Reto Foto: {{ foto_activo.titulo }}</h3>
+    {% if foto_activo.descripcion %}
+      <p style="opacity:.8">{{ foto_activo.descripcion }}</p>
+    {% endif %}
+    {% if mi_foto %}
+      <p>Ya subiste tu foto. ¡Ahora puedes ver la <a href="{{ url_for('reto_foto_galeria') }}">galería y votar</a>!</p>
+      <a class="btn" href="{{ url_for('reto_foto_galeria') }}">Ver galería y votar</a>
+    {% else %}
+      <a class="btn" href="{{ url_for('reto_foto_home') }}">Subir mi foto</a>
+    {% endif %}
+  </section>
+{% endif %}
 
     <!-- Tarjeta Conexión Alfa -->
     <div class="card">

@@ -484,16 +484,36 @@ def home():
 def index_page():
     me = session["jugador_id"]
     ya_respondio = bool(get_respuestas(me))
+
+    # Conexión Alfa
     _ensure_tablas_conexion_alfa()
     alfa_ya = bool(query("SELECT 1 FROM conexion_alfa_respuestas WHERE jugador_id=%s", (me,)))
+
+    # Adivina Quién
+    adivina = reto_activo("Adivina Quién")
+
+    # >>> Reto Foto (NUEVO): busca si hay un challenge activo
+    foto_activo = get_active_photo_challenge()
+    mi_foto = None
+    if foto_activo:
+        mi_foto = query(
+            "SELECT id, filename FROM photo_entries WHERE challenge_id=%s AND jugador_id=%s LIMIT 1",
+            (foto_activo["id"], me),
+        )
+        mi_foto = mi_foto[0] if mi_foto else None
+
     return render_template(
         "index.html",
         nombre=session.get("nombre", ""),
         ya_respondio=ya_respondio,
-        adivina_activo=reto_activo("Adivina Quién"),
+        adivina_activo=adivina,
         conexion_alfa_activo=reto_activo("Conexión Alfa"),
         alfa_ya=alfa_ya,
-        show_admin=session.get("is_admin", False)
+        show_admin=session.get("is_admin", False),
+
+        # >>> añade estas dos variables:
+        foto_activo=foto_activo,
+        mi_foto=mi_foto,
     )
 
 @app.route("/login", methods=["GET", "POST"], endpoint="login")
