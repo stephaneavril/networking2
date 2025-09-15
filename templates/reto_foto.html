@@ -1,74 +1,74 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8">
-  <title>Reto Foto</title>
+  <meta charset="utf-8"/>
+  <title>Reto de Foto</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <style>
-    body {
-      font-family: 'Segoe UI', sans-serif;
-      background-color: #0c0e2c;
-      color: white;
-      padding: 40px;
-      text-align: center;
-    }
-
-    .container {
-      background-color: #1f2140;
-      padding: 30px;
-      border-radius: 15px;
-      max-width: 600px;
-      margin: auto;
-      box-shadow: 0 0 20px rgba(255, 255, 255, 0.1);
-    }
-
-    h1 {
-      color: #ec1c24;
-    }
-
-    input[type="file"], button {
-      width: 100%;
-      padding: 10px;
-      margin-top: 15px;
-      border-radius: 8px;
-      border: none;
-      font-size: 1em;
-    }
-
-    button {
-      background-color: #ec1c24;
-      color: white;
-      font-weight: bold;
-      cursor: pointer;
-    }
-
-    .ya-subido {
-      background-color: #2d2f4c;
-      padding: 20px;
-      border-radius: 10px;
-      margin-top: 20px;
-    }
+    body{font-family:Segoe UI,system-ui,Arial;background:#0f1115;color:#eaeaea;margin:0;padding:24px}
+    .card{background:#151923;border:1px solid #22283a;border-radius:14px;padding:16px;margin-bottom:16px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}
+    .btn{background:#4f46e5;color:#fff;border:none;border-radius:10px;padding:10px 14px;cursor:pointer}
+    .btn.alt{background:#0ea5e9}
+    img{max-width:100%;border-radius:12px}
+    .muted{color:#9aa4b2}
+    .badge{background:#222c4a;border-radius:8px;padding:4px 8px;margin-left:6px}
+    form{margin:0}
   </style>
 </head>
 <body>
-  <div class="container">
-    {% if 'MI6' in reto_nombre %}
-      <img src="{{ url_for('static', filename='images/mi6.jpg') }}" alt="MI6 Banner" style="max-width: 100%; border-radius: 15px; margin-bottom: 20px;">
-    {% endif %}
-  
-    <h1>📸 {{ reto_nombre }}</h1>
-  
-    {% if ya_existe %}
-      <div class="ya-subido">
-        <p>Ya has subido tu foto para este reto. ¡Gracias por participar!</p>
-      </div>
-    {% else %}
-      <form method="POST" enctype="multipart/form-data">
-        <p>{{ mensaje if mensaje else "Sube una foto original que represente los valores de FARMAPIEL, solo puedes subir una foto. Esta será votada por los demás participantes." }}</p>
-        <input type="file" name="foto" accept="image/*" required>
-        <button type="submit">Subir Foto</button>
+  {% with messages = get_flashed_messages() %}
+  {% if messages %}
+    <div class="card" style="border-color:#2dd4bf">
+      {% for m in messages %}<div>{{ m }}</div>{% endfor %}
+    </div>
+  {% endif %}
+  {% endwith %}
+
+  {% if sin_reto %}
+    <div class="card">
+      <h2>🚫 No hay un reto activo</h2>
+      <p class="muted">Vuelve más tarde o pide al admin crear uno en <code>/admin_reto_foto</code>.</p>
+      <p><a class="btn" href="{{ url_for('index_page') }}">Volver al inicio</a></p>
+    </div>
+  {% else %}
+    <div class="card">
+      <h2>📸 {{ reto.titulo }}</h2>
+      {% if reto.descripcion %}<p class="muted">{{ reto.descripcion }}</p>{% endif %}
+
+      {% if not ya_subi %}
+      <h3>Sube tu foto</h3>
+      <form method="post" action="{{ url_for('reto_foto_subir') }}" enctype="multipart/form-data">
+        <input type="file" name="foto" accept="image/*" required/>
+        <button class="btn" type="submit">Subir</button>
       </form>
-    {% endif %}
-  </div>
-  
+      {% else %}
+        <p class="muted">Ya subiste tu foto. Puedes cambiarla volviendo a subir.</p>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <h3>Galería & Votación</h3>
+      <div class="grid">
+        {% for e in entries %}
+          <div class="card">
+            <img src="{{ url_for('static', filename='reto_foto/' ~ reto.id ~ '/' ~ e.filename) }}" alt="foto"/>
+            <p><strong>{{ e.nombre }}</strong>
+              <span class="badge">⭐ {{ votes.get(e.id, 0) }}</span>
+              {% if my_vote == e.id %}<span class="badge">Tu voto</span>{% endif %}
+            </p>
+            {% if my_vote != e.id %}
+            <form method="post" action="{{ url_for('reto_foto_votar') }}">
+              <input type="hidden" name="entry_id" value="{{ e.id }}"/>
+              <button class="btn alt" type="submit">Votar esta</button>
+            </form>
+            {% else %}
+              <p class="muted">Ya votaste esta. Puedes cambiar tu voto en otra foto.</p>
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  {% endif %}
 </body>
 </html>

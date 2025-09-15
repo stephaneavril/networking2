@@ -1,4 +1,4 @@
-# app.py — Mini TEAMS: Login → Preguntas → Adivina Quién + Conexión Alfa (estable, migraciones robustas)
+# app.py — Mini TEAMS: Login → Preguntas → Adivina Quién + Conexión Alfa + Reto Foto
 import os
 import json
 import random
@@ -10,6 +10,7 @@ from typing import Tuple
 from collections import Counter
 from difflib import SequenceMatcher
 from threading import Lock
+from werkzeug.utils import secure_filename
 
 from flask import (
     Flask, render_template, render_template_string, request, session,
@@ -189,11 +190,8 @@ $do$;
 """
     execute(sql)
 
-    # ========= Conexión Alfa: respuestas (migración robusta) =========
-    # 1) Garantiza existencia sin pisar estructura previa
+    # ========= Conexión Alfa: respuestas =========
     execute("CREATE TABLE IF NOT EXISTS conexion_alfa_respuestas (jugador_id INTEGER)")
-
-    # 2) Asegura columna jugador_id y backfill desde posible 'id'
     execute(r"""
 DO $$BEGIN
   IF NOT EXISTS (
@@ -214,27 +212,23 @@ DO $$BEGIN
 END$$;
 """)
 
-    # 3) Asegura columnas r1..r7
     for col in ("r1","r2","r3","r4","r5","r6","r7"):
         execute(f"ALTER TABLE conexion_alfa_respuestas ADD COLUMN IF NOT EXISTS {col} TEXT;")
 
-    # 4) Timestamps
     execute("ALTER TABLE conexion_alfa_respuestas ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW();")
     execute("ALTER TABLE conexion_alfa_respuestas ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();")
 
-    # 5) Índice único (aunque luego haya PK)
     execute("""
         CREATE UNIQUE INDEX IF NOT EXISTS ux_ca_respuestas_jugador_id
         ON conexion_alfa_respuestas(jugador_id)
     """)
 
-    # 6) Migración segura de PK / columnas legadas (sin placeholders en RAISE)
     execute(r"""
 DO $$DECLARE
   pk_name text;
   n_nulls int;
 BEGIN
-  -- Backfill de 'correo'/'nombre' desde jugadores si existen las columnas
+  -- Backfill nombre/correo si existieran columnas legadas
   IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_respuestas' AND column_name='correo') THEN
     EXECUTE $SQL$
       UPDATE conexion_alfa_respuestas car
@@ -255,7 +249,6 @@ BEGIN
     $SQL$;
   END IF;
 
-  -- ¿La PK actual está en 'correo'?
   SELECT c.conname INTO pk_name
   FROM pg_constraint c
   JOIN pg_class t ON t.oid = c.conrelid
@@ -264,23 +257,19 @@ BEGIN
   LIMIT 1;
 
   IF pk_name IS NOT NULL THEN
-    -- Antes de mover la PK, asegúrate de que jugador_id está completo
     SELECT COUNT(*) INTO n_nulls
     FROM conexion_alfa_respuestas
     WHERE jugador_id IS NULL;
 
     IF n_nulls = 0 THEN
-      -- Crea nueva PK en jugador_id (si no existe)
       BEGIN
         ALTER TABLE conexion_alfa_respuestas ADD CONSTRAINT conexion_alfa_respuestas_pkey_jid PRIMARY KEY (jugador_id);
       EXCEPTION WHEN duplicate_object THEN
         PERFORM 1;
       END;
 
-      -- Quita la PK anterior basada en correo
       EXECUTE format('ALTER TABLE conexion_alfa_respuestas DROP CONSTRAINT %I', pk_name);
 
-      -- Relaja NOT NULL en correo si todavía lo tiene y ya no es PK
       IF EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_name='conexion_alfa_respuestas'
@@ -290,10 +279,9 @@ BEGIN
         ALTER TABLE conexion_alfa_respuestas ALTER COLUMN correo DROP NOT NULL;
       END IF;
     ELSE
-      RAISE NOTICE USING MESSAGE = 'No se migra PK: ' || n_nulls::text || ' nulos en jugador_id. Revisa datos.';
+      RAISE NOTICE 'No se migra PK: % nulos en jugador_id. Revisa datos.', n_nulls;
     END IF;
   ELSE
-    -- Si 'correo' NO es PK: relaja NOT NULL sólo si aún está marcado y no participa en la PK
     IF EXISTS (
       SELECT 1
       FROM information_schema.columns
@@ -315,7 +303,7 @@ BEGIN
 END$$;
 """)
 
-    # ========= Conexión Alfa: matches (renombra/crea columnas si faltan) =========
+    # ========= Conexión Alfa: matches =========
     execute("""
         CREATE TABLE IF NOT EXISTS conexion_alfa_matches (
             id SERIAL PRIMARY KEY,
@@ -331,7 +319,6 @@ END$$;
 
     execute(r"""
 DO $$BEGIN
-  -- jugador_1_id
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_matches' AND column_name='jugador_1_id'
   ) THEN
@@ -344,7 +331,6 @@ DO $$BEGIN
     END IF;
   END IF;
 
-  -- jugador_2_id
   IF NOT EXISTS (
     SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_matches' AND column_name='jugador_2_id'
   ) THEN
@@ -357,7 +343,6 @@ DO $$BEGIN
     END IF;
   END IF;
 
-  -- demás columnas
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='conexion_alfa_matches' AND column_name='score') THEN
     ALTER TABLE conexion_alfa_matches ADD COLUMN score FLOAT NOT NULL DEFAULT 0;
   END IF;
@@ -376,9 +361,76 @@ DO $$BEGIN
 END$$;
 """)
 
-    # Índices
     execute("CREATE INDEX IF NOT EXISTS idx_ca_j1 ON conexion_alfa_matches(jugador_1_id)")
     execute("CREATE INDEX IF NOT EXISTS idx_ca_j2 ON conexion_alfa_matches(jugador_2_id)")
+
+    # ========= RETO FOTO =========
+    execute("""
+        CREATE TABLE IF NOT EXISTS photo_challenges (
+            id SERIAL PRIMARY KEY,
+            titulo TEXT NOT NULL,
+            descripcion TEXT,
+            activo BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        );
+    """)
+
+    execute("""
+        CREATE TABLE IF NOT EXISTS photo_entries (
+            id SERIAL PRIMARY KEY,
+            challenge_id INTEGER NOT NULL REFERENCES photo_challenges(id) ON DELETE CASCADE,
+            jugador_id INTEGER NOT NULL REFERENCES jugadores(id) ON DELETE CASCADE,
+            filename TEXT NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+            UNIQUE (challenge_id, jugador_id)
+        );
+    """)
+
+    execute("""
+        CREATE TABLE IF NOT EXISTS photo_votes (
+            id SERIAL PRIMARY KEY,
+            challenge_id INTEGER NOT NULL REFERENCES photo_challenges(id) ON DELETE CASCADE,
+            entry_id INTEGER NOT NULL REFERENCES photo_entries(id) ON DELETE CASCADE,
+            jugador_id INTEGER NOT NULL REFERENCES jugadores(id) ON DELETE CASCADE,
+            created_at TIMESTAMP NOT NULL DEFAULT NOW()
+        );
+    """)
+
+    # Quita constraints únicas antiguas (challenge_id, jugador_id) si existieran, para permitir 3 votos por reto
+    execute(r"""
+DO $$DECLARE
+  cons RECORD;
+  cols TEXT[];
+BEGIN
+  FOR cons IN
+    SELECT c.conname
+    FROM pg_constraint c
+    JOIN pg_class t ON t.oid = c.conrelid
+    JOIN pg_namespace n ON n.oid = t.relnamespace
+    WHERE n.nspname = 'public'
+      AND t.relname = 'photo_votes'
+      AND c.contype = 'u'
+  LOOP
+    SELECT array_agg(a.attname ORDER BY a.attnum) INTO cols
+    FROM pg_attribute a
+    JOIN pg_constraint cc ON cc.conrelid = a.attrelid
+    WHERE cc.conname = cons.conname
+      AND a.attnum = ANY(cc.conkey);
+
+    IF cols = ARRAY['challenge_id','jugador_id'] THEN
+      EXECUTE format('ALTER TABLE photo_votes DROP CONSTRAINT %I', cons.conname);
+    END IF;
+  END LOOP;
+END$$;
+""")
+
+    # Un voto máximo por foto y jugador, hasta 3 por reto
+    execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_photo_votes_one_per_entry
+        ON photo_votes(challenge_id, jugador_id, entry_id);
+    """)
+    execute("CREATE INDEX IF NOT EXISTS idx_photo_entries_ch ON photo_entries(challenge_id);")
+    execute("CREATE INDEX IF NOT EXISTS idx_photo_votes_ch ON photo_votes(challenge_id);")
 
 # 👇 Inicialización
 ensure_schema()
@@ -432,7 +484,6 @@ def home():
 def index_page():
     me = session["jugador_id"]
     ya_respondio = bool(get_respuestas(me))
-    # asegura tablas de conexión alfa y calcula flags
     _ensure_tablas_conexion_alfa()
     alfa_ya = bool(query("SELECT 1 FROM conexion_alfa_respuestas WHERE jugador_id=%s", (me,)))
     return render_template(
@@ -591,7 +642,7 @@ def adivina_finalizado():
     if   pos == 1: puntos_bonus = 50
     elif pos == 2: puntos_bonus = 40
     elif pos == 3: puntos_bonus = 30
-    elif pos == 4: puntos_bonus = 40
+    elif pos == 4: puntos_bonus = 20
     else:          puntos_bonus = 10
 
     puntos_total = puntos_base + puntos_bonus
@@ -612,12 +663,13 @@ def adivina_finalizado():
     return jsonify({"ok": True, "pos": pos, "puntos_base": puntos_base, "puntos_bonus": puntos_bonus, "puntos_total": puntos_total})
 
 # ─────────────────────────────────────────────────────────────
-# Admin Panel + activación de reto
+# Admin Panel + activación de reto (incluye Reto Foto)
 # ─────────────────────────────────────────────────────────────
 @app.route("/admin_panel", methods=["GET", "POST"])
 @admin_required
 def admin_panel():
     if request.method == "POST":
+        # ====== Retos generales (toggle/solo) ======
         reto_id = request.form.get("reto_id")
         activo  = request.form.get("activo")
         activar_solo = request.form.get("activar_solo")
@@ -630,6 +682,30 @@ def admin_panel():
             execute("UPDATE retos SET activo=FALSE")
             execute("UPDATE retos SET activo=TRUE WHERE id=%s", (rid,))
             flash("Se activó sólo el reto seleccionado.")
+            return redirect(url_for("admin_panel"))
+
+        # ====== ADMIN: Reto Foto (crear/activar/cerrar) ======
+        if request.form.get("crear_reto_foto") == "1":
+            titulo = (request.form.get("titulo") or "").strip()
+            descripcion = (request.form.get("descripcion") or "").strip()
+            if titulo:
+                execute("INSERT INTO photo_challenges (titulo, descripcion, activo) VALUES (%s,%s,FALSE)", (titulo, descripcion))
+                flash("Reto Foto creado (inactivo).")
+            else:
+                flash("Escribe un título para el Reto Foto.")
+            return redirect(url_for("admin_panel"))
+
+        if request.form.get("activar_reto_foto"):
+            rid = int(request.form["activar_reto_foto"])
+            execute("UPDATE photo_challenges SET activo=FALSE")
+            execute("UPDATE photo_challenges SET activo=TRUE WHERE id=%s", (rid,))
+            flash("Reto Foto activado.")
+            return redirect(url_for("admin_panel"))
+
+        if request.form.get("cerrar_reto_foto"):
+            rid = int(request.form["cerrar_reto_foto"])
+            execute("UPDATE photo_challenges SET activo=FALSE WHERE id=%s", (rid,))
+            flash("Reto Foto cerrado.")
             return redirect(url_for("admin_panel"))
 
     participantes = query("""
@@ -653,6 +729,12 @@ def admin_panel():
     tj, tr, faltan = readiness_counts()
     adivina_activo = reto_activo("Adivina Quién")
 
+    # Bloque Reto Foto para admin
+    foto_challenges = list_photo_challenges()
+    active_ch = get_active_photo_challenge()
+    foto_entries = get_photo_entries(active_ch["id"]) if active_ch else []
+    foto_votes_map = get_votes_map(active_ch["id"]) if active_ch else {}
+
     return render_template(
         "admin_panel.html",
         retos=retos,
@@ -663,8 +745,180 @@ def admin_panel():
         total_jugadores=tj,
         total_respuestas=tr,
         faltan=faltan,
-        adivina_activo=adivina_activo
+        adivina_activo=adivina_activo,
+        # Reto Foto
+        foto_challenges=foto_challenges,
+        foto_activo=active_ch,
+        foto_entries=foto_entries,
+        foto_votes_map=foto_votes_map
     )
+# ─────────────────────────────────────────────────────────────
+# Reto Foto — Constantes y helpers
+# ─────────────────────────────────────────────────────────────
+ALLOWED_EXTS = {"jpg", "jpeg", "png", "gif"}
+
+def _allowed_file(filename: str) -> bool:
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTS
+
+def list_photo_challenges():
+    return query("SELECT * FROM photo_challenges ORDER BY created_at DESC")
+
+def get_active_photo_challenge():
+    rows = query("SELECT * FROM photo_challenges WHERE activo=TRUE ORDER BY created_at DESC LIMIT 1")
+    return rows[0] if rows else None
+
+def get_photo_entries(ch_id: int):
+    return query("""
+        SELECT e.id, e.filename, e.jugador_id, j.nombre
+        FROM photo_entries e
+        JOIN jugadores j ON j.id=e.jugador_id
+        WHERE e.challenge_id=%s
+        ORDER BY e.created_at ASC
+    """, (ch_id,))
+
+def count_my_votes_in_challenge(ch_id: int, jugador_id: int) -> int:
+    rows = query("SELECT COUNT(*) AS c FROM photo_votes WHERE challenge_id=%s AND jugador_id=%s", (ch_id, jugador_id))
+    return int(rows[0]["c"]) if rows else 0
+
+def already_voted_entry(ch_id: int, entry_id: int, jugador_id: int) -> bool:
+    r = query(
+        "SELECT 1 FROM photo_votes WHERE challenge_id=%s AND entry_id=%s AND jugador_id=%s LIMIT 1",
+        (ch_id, entry_id, jugador_id),
+    )
+    return bool(r)
+
+def get_votes_map(ch_id: int):
+    rows = query(
+        "SELECT entry_id, COUNT(*) AS c FROM photo_votes WHERE challenge_id=%s GROUP BY entry_id",
+        (ch_id,),
+    )
+    return {r["entry_id"]: int(r["c"]) for r in rows}
+
+# ─────────────────────────────────────────────────────────────
+# Reto Foto — Rutas de usuario
+# ─────────────────────────────────────────────────────────────
+@app.route("/reto_foto", methods=["GET"])
+@login_required
+def reto_foto_home():
+    ch = get_active_photo_challenge()
+    if not ch:
+        flash("No hay un Reto Foto activo en este momento.")
+        return redirect(url_for("index_page"))
+    me = session["jugador_id"]
+    mi = query(
+        "SELECT id, filename FROM photo_entries WHERE challenge_id=%s AND jugador_id=%s LIMIT 1",
+        (ch["id"], me),
+    )
+    return render_template("reto_foto.html", reto=ch, mi_foto=mi[0] if mi else None)
+
+@app.route("/reto_foto_subir", methods=["POST"])
+@login_required
+def reto_foto_subir():
+    ch = get_active_photo_challenge()
+    if not ch:
+        flash("No hay Reto Foto activo.")
+        return redirect(url_for("index_page"))
+
+    me = session["jugador_id"]
+    # 1 sola foto por reto
+    ya = query("SELECT 1 FROM photo_entries WHERE challenge_id=%s AND jugador_id=%s", (ch["id"], me))
+    if ya:
+        flash("Ya subiste tu foto para este reto.")
+        return redirect(url_for("reto_foto_galeria"))
+
+    f = request.files.get("foto")
+    if not f or not f.filename or not _allowed_file(f.filename):
+        flash("Sube una imagen válida (jpg, jpeg, png, gif).")
+        return redirect(url_for("reto_foto_home"))
+
+    # Guardado en /static/fotos_ch/<challenge_id>/<archivo>
+    carpeta = os.path.join(app.static_folder, "fotos_ch", str(ch["id"]))
+    os.makedirs(carpeta, exist_ok=True)
+    ext = f.filename.rsplit(".", 1)[1].lower()
+    fname = secure_filename(f"ch{ch['id']}_u{me}_{int(time.time())}.{ext}")
+    f.save(os.path.join(carpeta, fname))
+
+    execute(
+        "INSERT INTO photo_entries (challenge_id, jugador_id, filename) VALUES (%s,%s,%s)",
+        (ch["id"], me, fname),
+    )
+    flash("¡Foto subida!")
+    return redirect(url_for("reto_foto_galeria"))
+
+@app.route("/reto_foto_galeria", methods=["GET"])
+@login_required
+def reto_foto_galeria():
+    ch = get_active_photo_challenge()
+    if not ch:
+        flash("No hay Reto Foto activo.")
+        return redirect(url_for("index_page"))
+
+    me = session["jugador_id"]
+    entries = get_photo_entries(ch["id"])
+    votes_map = get_votes_map(ch["id"])
+    mis_votos = count_my_votes_in_challenge(ch["id"], me)
+    return render_template(
+        "reto_foto_galeria.html",
+        reto=ch,
+        entries=entries,
+        votes_map=votes_map,
+        mis_votos=mis_votos,
+        votos_max=3,
+    )
+
+@app.route("/reto_foto_votar", methods=["POST"])
+@login_required
+def reto_foto_votar():
+    ch = get_active_photo_challenge()
+    if not ch:
+        flash("No hay Reto Foto activo.")
+        return redirect(url_for("index_page"))
+
+    me = session["jugador_id"]
+    entry_id = int(request.form.get("entry_id") or 0)
+
+    ent = query("SELECT id, jugador_id FROM photo_entries WHERE id=%s AND challenge_id=%s", (entry_id, ch["id"]))
+    if not ent:
+        flash("Foto no encontrada.")
+        return redirect(url_for("reto_foto_galeria"))
+    ent = ent[0]
+
+    if ent["jugador_id"] == me:
+        flash("No puedes votar tu propia foto.")
+        return redirect(url_for("reto_foto_galeria"))
+
+    if already_voted_entry(ch["id"], entry_id, me):
+        flash("Ya votaste esta foto.")
+        return redirect(url_for("reto_foto_galeria"))
+
+    usados = count_my_votes_in_challenge(ch["id"], me)
+    if usados >= 3:
+        flash("Ya usaste tus 3 votos en este reto.")
+        return redirect(url_for("reto_foto_galeria"))
+
+    execute(
+        "INSERT INTO photo_votes (challenge_id, entry_id, jugador_id) VALUES (%s,%s,%s)",
+        (ch["id"], entry_id, me),
+    )
+    flash("Voto registrado ✅")
+    return redirect(url_for("reto_foto_galeria"))
+
+@app.route("/reto_foto_quitar_voto", methods=["POST"])
+@login_required
+def reto_foto_quitar_voto():
+    ch = get_active_photo_challenge()
+    if not ch:
+        flash("No hay Reto Foto activo.")
+        return redirect(url_for("index_page"))
+
+    me = session["jugador_id"]
+    entry_id = int(request.form.get("entry_id") or 0)
+    execute(
+        "DELETE FROM photo_votes WHERE challenge_id=%s AND entry_id=%s AND jugador_id=%s",
+        (ch["id"], entry_id, me),
+    )
+    flash("Voto retirado.")
+    return redirect(url_for("reto_foto_galeria"))
 
 @app.route("/admin/activar_adivina", methods=["POST"])
 @admin_required
@@ -695,7 +949,7 @@ def admin_desactivar_adivina():
     return redirect(url_for("admin_panel"))
 
 # ─────────────────────────────────────────────────────────────
-# Conexión Alfa — Tablas + helpers + rutas estables
+# Conexión Alfa — Tablas + helpers + rutas
 # ─────────────────────────────────────────────────────────────
 MATCH_BUILD_LOCK = Lock()
 
@@ -916,7 +1170,6 @@ def conexion_alfa_mi_perfil():
     perfil_txt = _perfil_ia_ligero(r_base[0] if r_base else {}, r_extra[0] if r_extra else {})
     return render_template("conexion_alfa_perfil.html", perfil={"perfil_ia": perfil_txt})
 
-# Alias práctico: /conexion_alfa → perfil
 @app.route("/conexion_alfa", methods=["GET"])
 @login_required
 def conexion_alfa_redirect():
@@ -959,7 +1212,6 @@ def conexion_alfa_mi_match():
     return render_template("conexion_alfa_mi_match.html",
                            sin_match=False, match=match_dict, feedback_dado=m["feedback"])
 
-# Evidencia/feedback del match
 @app.route("/subir_foto_match", methods=["POST"])
 @login_required
 def subir_foto_match():
@@ -994,7 +1246,6 @@ def feedback_match():
             flash("¡Gracias por tu feedback!")
     return redirect(url_for("conexion_alfa_mi_match"))
 
-# Rutas legacy opcionales (si quieres usar pantallas separadas de foto/video)
 @app.route("/conexion_alfa_subir_foto", methods=["GET", "POST"])
 @login_required
 def conexion_alfa_subir_foto():
@@ -1061,11 +1312,9 @@ def conexion_alfa_subir_video():
     """, (me,))
     return render_template("conexion_alfa_subir_video.html", match=match[0])
 
-# Vista admin opcional para ver matches + métricas simples
 @app.route("/conexion_alfa_emparejamientos", methods=["GET"])
 @admin_required
 def conexion_alfa_emparejamientos():
-    # pares únicos (a<b)
     pares = query("""
         SELECT LEAST(jugador_1_id, jugador_2_id) AS a,
                GREATEST(jugador_1_id, jugador_2_id) AS b
