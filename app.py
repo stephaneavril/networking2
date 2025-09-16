@@ -1212,6 +1212,30 @@ def conexion_alfa_form():
 
     if request.method == "POST":
         data = {f"r{k}": (request.form.get(f"r{k}") or "").strip() for k in range(1,8)}
+
+        # Parche defensivo por si la BBDD aún tiene NOT NULL en columnas legadas
+        execute(r"""
+        DO $$BEGIN
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='conexion_alfa_respuestas' AND column_name='correo' AND is_nullable='NO'
+          ) THEN
+            BEGIN
+              ALTER TABLE conexion_alfa_respuestas ALTER COLUMN correo DROP NOT NULL;
+            EXCEPTION WHEN others THEN PERFORM 1; END;
+          END IF;
+
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name='conexion_alfa_respuestas' AND column_name='nombre' AND is_nullable='NO'
+          ) THEN
+            BEGIN
+              ALTER TABLE conexion_alfa_respuestas ALTER COLUMN nombre DROP NOT NULL;
+            EXCEPTION WHEN others THEN PERFORM 1; END;
+          END IF;
+        END$$;
+        """)
+
         execute("""
             INSERT INTO conexion_alfa_respuestas (jugador_id, r1,r2,r3,r4,r5,r6,r7)
             VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
@@ -1219,22 +1243,13 @@ def conexion_alfa_form():
               SET r1=EXCLUDED.r1, r2=EXCLUDED.r2, r3=EXCLUDED.r3,
                   r4=EXCLUDED.r4, r5=EXCLUDED.r5, r6=EXCLUDED.r6, r7=EXCLUDED.r7,
                   updated_at=NOW()
-        """, (me, data["r1"],data["r2"],data["r3"],data["r4"],data["r5"],data["r6"],data["r7"]))
+        """, (me, data["r1"], data["r2"], data["r3"], data["r4"], data["r5"], data["r6"], data["r7"]))
         flash("¡Gracias! Tus respuestas fueron guardadas.")
         return redirect(url_for("conexion_alfa_mi_perfil"))
 
     ya = query("SELECT 1 FROM conexion_alfa_respuestas WHERE jugador_id=%s", (me,))
     return render_template("conexion_alfa.html", ya_existe=bool(ya))
 
-def _perfil_ia_ligero(base_row, extra_row):
-    piezas = []
-    for k,label in ALFA_CAMPOS_BASE:
-        v = (base_row or {}).get(k)
-        if v: piezas.append(f"• {label}: {v}.")
-    for k,label in ALFA_CAMPOS_EXTRA:
-        v = (extra_row or {}).get(k)
-        if v: piezas.append(f"• {label}: {v}.")
-    return "\n".join(piezas) or "Perfil en construcción."
 
 @app.route("/conexion_alfa_mi_perfil", methods=["GET"])
 @login_required
@@ -1451,41 +1466,111 @@ def ver_fotos_equipo():
 def generar_contenido_adivina():
     flash("Adivina Quién usa las respuestas actuales (no requiere pre-carga).")
     return redirect(url_for("admin_panel"))
+
 @app.route("/admin/fix_conexion_alfa_schema")
 @admin_required
 def admin_fix_conexion_alfa_schema():
-    # Endurece el esquema legado que está causando el NOT NULL
     execute(r"""
-    DO $$BEGIN
+    DO $$
+    DECLARE
+      pk_on_correo text;
+      has_jid boolean;
+      n_nulls int;
+    BEGIN
+      -- Asegura tabla y columnas base
+      CREATE TABLE IF NOT EXISTS conexion_alfa_respuestas (
+        jugador_id INTEGER,
+        r1 TEXT, r2 TEXT, r3 TEXT, r4 TEXT, r5 TEXT, r6 TEXT, r7 TEXT,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      );
+
+      -- Asegura jugador_id y backfill desde columna id si existía
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name='conexion_alfa_respuestas' AND column_name='jugador_id'
+      ) THEN
+        ALTER TABLE conexion_alfa_respuestas ADD COLUMN jugador_id INTEGER;
+      END IF;
+
       IF EXISTS (
         SELECT 1 FROM information_schema.columns
-        WHERE table_name='conexion_alfa_respuestas' AND column_name='correo'
+        WHERE table_name='conexion_alfa_respuestas' AND column_name='id'
       ) THEN
+        UPDATE conexion_alfa_respuestas
+           SET jugador_id = id
+         WHERE jugador_id IS NULL;
+      END IF;
+
+      -- ¿La PK está (todavía) en 'correo'?
+      SELECT c.conname INTO pk_on_correo
+      FROM pg_constraint c
+      JOIN pg_class t ON t.oid = c.conrelid
+      JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
+      WHERE c.contype = 'p'
+        AND t.relname = 'conexion_alfa_respuestas'
+        AND a.attname = 'correo'
+      LIMIT 1;
+
+      -- Si hay registros con jugador_id NULL, no podremos pasar PK a jugador_id.
+      SELECT COUNT(*) INTO n_nulls
+      FROM conexion_alfa_respuestas
+      WHERE jugador_id IS NULL;
+
+      -- Crea PK en jugador_id si es posible
+      IF n_nulls = 0 THEN
+        BEGIN
+          ALTER TABLE conexion_alfa_respuestas
+            ADD CONSTRAINT ca_res_pk PRIMARY KEY (jugador_id);
+        EXCEPTION WHEN duplicate_object THEN
+          -- ya existe, seguimos
+          PERFORM 1;
+        END;
+      END IF;
+
+      -- Si la PK está en correo, quítala (ya tenemos o acabamos de crear la PK en jugador_id)
+      IF pk_on_correo IS NOT NULL THEN
+        EXECUTE format('ALTER TABLE conexion_alfa_respuestas DROP CONSTRAINT %I', pk_on_correo);
+      END IF;
+
+      -- Por si correo/nombre quedaron NOT NULL por algún esquema viejo: relájalos
+      IF EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name='conexion_alfa_respuestas' AND column_name='correo') THEN
         BEGIN
           ALTER TABLE conexion_alfa_respuestas ALTER COLUMN correo DROP NOT NULL;
         EXCEPTION WHEN others THEN PERFORM 1; END;
       END IF;
 
-      IF EXISTS (
-        SELECT 1 FROM information_schema.columns
-        WHERE table_name='conexion_alfa_respuestas' AND column_name='nombre'
-      ) THEN
+      IF EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_name='conexion_alfa_respuestas' AND column_name='nombre') THEN
         BEGIN
           ALTER TABLE conexion_alfa_respuestas ALTER COLUMN nombre DROP NOT NULL;
         EXCEPTION WHEN others THEN PERFORM 1; END;
       END IF;
 
-      -- Asegura PK correcta en jugador_id y no en correo
-      BEGIN
-        ALTER TABLE conexion_alfa_respuestas ADD CONSTRAINT ca_res_pk PRIMARY KEY (jugador_id);
-      EXCEPTION WHEN duplicate_object THEN PERFORM 1; END;
-
-      -- Si alguna vez quedó PK en correo, intenta removerla (safe)
-      PERFORM 1;
-    END$$;
+      -- Actualiza timestamps por consistencia
+      UPDATE conexion_alfa_respuestas
+         SET updated_at = NOW()
+       WHERE updated_at IS NULL;
+    END
+    $$;
     """)
-    flash("Esquema de Conexión Alfa corregido. Vuelve a enviar el formulario.")
+    flash("Esquema de Conexión Alfa corregido: PK en jugador_id y correo nullable.")
     return redirect(url_for("admin_panel"))
+
+@app.route("/admin/debug_reto_foto")
+@admin_required
+def admin_debug_reto_foto():
+    ch = get_active_photo_challenge()
+    if not ch:
+        return "<pre>No hay reto activo</pre>"
+    rows = get_photo_entries(ch["id"])
+    lines = []
+    for e in rows:
+        path = os.path.join(app.static_folder, "fotos_ch", str(ch["id"]), e["filename"])
+        exists = os.path.exists(path)
+        lines.append(f"{e['id']:>3} | j:{e['jugador_id']:<4} | {e['nombre']:<20} | {e['filename']} | exists={exists} | {path}")
+    return "<pre>" + "\n".join(lines or ["(sin filas)"]) + "</pre>"
 
 # ─────────────────────────────────────────────────────────────
 # Main

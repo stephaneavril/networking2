@@ -1,3 +1,4 @@
+<!-- templates/adivina.html -->
 <!doctype html>
 <html lang="es">
 <head>
@@ -6,131 +7,170 @@
   <title>Adivina Quién</title>
   <style>
     body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial;background:#0b0b0f;color:#eaeaf2;margin:0;padding:24px}
-    .card{max-width:820px;margin:0 auto;background:#13131a;border:1px solid #242433;border-radius:16px;padding:24px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
-    .pistas li{margin:6px 0}
-    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;margin-top:16px}
-    .btn{border:1px solid #3a3a4d;background:#1e1e2a;color:#fff;padding:10px 12px;border-radius:10px;cursor:pointer}
-    .btn:hover{background:#2a2a3a}
-    .muted{color:#a9a9ba}
+    .wrap{max-width:900px;margin:0 auto}
+    .card{background:#13131a;border:1px solid #242433;border-radius:16px;padding:24px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+    .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+    .pill{display:inline-block;border:1px solid #2a2a3a;background:#161622;color:#cbd5e1;border-radius:999px;padding:6px 10px;font-size:.95rem}
+    .btn{appearance:none;border:1px solid #3a3a4d;background:#1e1e2a;color:#fff;padding:10px 14px;border-radius:12px;text-decoration:none;cursor:pointer}
+    .btn.primary{background:#3a6df0;border-color:#3a6df0}
+    .btn:disabled{opacity:.5;cursor:not-allowed}
+    .hint{background:#0f1729;border:1px solid #253057;border-radius:10px;padding:10px}
+    .bad{color:#fbbf24}.ok{color:#4ade80}.muted{color:#a9a9ba}
+    .shake{animation:shake .3s linear}
+    @keyframes shake{0%{transform:translateX(0)}25%{transform:translateX(-6px)}50%{transform:translateX(6px)}75%{transform:translateX(-3px)}100%{transform:translateX(0)}}
   </style>
 </head>
 <body>
-<div class="card">
-  <h1>Adivina Quién</h1>
-  <p class="muted">Acierto: +10 · Error: −10 (se mantiene la misma persona hasta acertar).</p>
-
-  <div id="juego" style="display:none">
-    <h3>¿Quién es?</h3>
-    <ul id="pistas" class="pistas"></ul>
-    <div id="opciones" class="grid"></div>
-    <p id="estado" class="muted"></p>
-  </div>
-
-  <div id="fin" style="display:none">
-    <h3>¡Terminaste! 🎉</h3>
-    <p id="resumen"></p>
-    <a class="btn" href="{{ url_for('index_page') }}">Volver al inicio</a>
+<div class="wrap">
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <div>
+        <h1 style="margin:.2rem 0">Adivina Quién</h1>
+        <div class="muted">Hola, {{ yo }}. Adivina la persona con base en 3 pistas.</div>
+      </div>
+      <div class="row">
+        <span class="pill" id="round">Ronda 0</span>
+        <span class="pill">✅ <span id="ok">0</span></span>
+        <span class="pill">❌ <span id="ko">0</span></span>
+      </div>
+    </div>
+    <hr style="border:none;border-top:1px solid #242433;margin:16px 0">
+    <div id="game"></div>
+    <hr style="border:none;border-top:1px solid #242433;margin:16px 0">
+    <div class="row">
+      <button class="btn" id="btn-skip" type="button">Saltar</button>
+      <button class="btn bad" id="btn-final" type="button">Finalizar partida</button>
+    </div>
   </div>
 </div>
 
 <script>
-  const participantes = {{ participantes_json|safe }}; // [{id,nombre,pistas:[...]}]
-  // Opcional: por si algún día cambias algo en backend
-  if (participantes.length > 5) participantes.length = 5;
-  // barajamos orden de personas a adivinar
-  for (let i = participantes.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [participantes[i], participantes[j]] = [participantes[j], participantes[i]];
-  }
+  // Datos del backend
+  const participantes = JSON.parse({{ participantes_json|tojson|safe }});
 
-  const juegoEl = document.getElementById('juego');
-  const pistasEl = document.getElementById('pistas');
-  const opcionesEl = document.getElementById('opciones');
-  const estadoEl = document.getElementById('estado');
-  const finEl = document.getElementById('fin');
-  const resumenEl = document.getElementById('resumen');
-
-  let idx = 0;                 // índice de la persona objetivo
+  // Estado
+  let idx = 0;
   let aciertos = 0;
   let fallos = 0;
   let rondas = 0;
 
-  // opciones visibles: todos los nombres vivos menos repetidos
-  let poolNombres = participantes.map(p => p.nombre);
+  // Util
+  function shuffle(a){ for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];} return a; }
 
-  function renderObjetivo() {
-    const objetivo = participantes[idx];
-    pistasEl.innerHTML = '';
-    // Muestra TODAS las pistas (ya vienen hasta 3 del backend)
-    objetivo.pistas.forEach(p => {
-      const li = document.createElement('li');
-      li.textContent = `${p.label}: ${p.text}`;
-      pistasEl.appendChild(li);
-    });
-
-    // arma botones de opciones (todos los nombres restantes)
-    opcionesEl.innerHTML = '';
-    const nombres = [...poolNombres];
-    // barajar
-    for (let i = nombres.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [nombres[i], nombres[j]] = [nombres[j], nombres[i]];
-    }
-    nombres.forEach(nom => {
-      const b = document.createElement('button');
-      b.className = 'btn';
-      b.textContent = nom;
-      b.onclick = () => intento(nom);
-      opcionesEl.appendChild(b);
-    });
-    estadoEl.textContent = `Progreso: ${idx+1}/${participantes.length} · Aciertos: ${aciertos} · Fallos: ${fallos}`;
+  function opcionesPara(iObjetivo){
+    // Crea lista de 5 opciones (1 correcta + 4 distractores si hay)
+    const correct = participantes[iObjetivo];
+    const pool = participantes.filter((_,i)=>i!==iObjetivo).map(p=>({id:p.id,nombre:p.nombre}));
+    shuffle(pool);
+    const distractores = pool.slice(0, Math.min(4, pool.length));
+    const opts = [{id:correct.id, nombre:correct.nombre}, ...distractores];
+    return shuffle(opts);
   }
 
-  function intento(nombreElegido) {
-    const objetivo = participantes[idx];
-    rondas++;
-    if (nombreElegido === objetivo.nombre) {
-      aciertos++;
-      // quitar del pool para que no vuelva a salir como opción
-      poolNombres = poolNombres.filter(n => n !== objetivo.nombre);
-      idx++;
-      if (idx >= participantes.length) {
-        terminar();
-      } else {
-        renderObjetivo();
+  function renderRound(){
+    if (idx >= participantes.length){
+      return finalizar();
+    }
+    const p = participantes[idx];
+    const cont = document.getElementById('game');
+    const opts = opcionesPara(idx);
+
+    cont.innerHTML = `
+      <div id="roundcard">
+        <div class="row" style="margin-bottom:10px;gap:8px">
+          ${(p.pistas||[]).map(h=>`<div class="hint">${h.label}: <b>${h.text}</b></div>`).join("")}
+        </div>
+        <label class="muted" for="sel">¿Quién crees que es?</label><br>
+        <select id="sel" style="margin-top:8px;padding:10px;border-radius:10px;background:#0f0f16;color:#fff;border:1px solid #2a2a3a;min-width:260px">
+          <option value="">— Selecciona —</option>
+          ${opts.map(o=>`<option value="${o.id}">${o.nombre}</option>`).join("")}
+        </select>
+        <div class="row" style="margin-top:12px">
+          <button class="btn primary" id="btn-ok" disabled>Validar</button>
+        </div>
+        <div id="msg" class="muted" style="margin-top:10px"></div>
+      </div>
+    `;
+
+    const sel = document.getElementById('sel');
+    const btn = document.getElementById('btn-ok');
+    sel.addEventListener('change', ()=> btn.disabled = !sel.value);
+
+    btn.addEventListener('click', ()=>{
+      if (!sel.value) return;
+      const chosen = parseInt(sel.value,10);
+      const isRight = chosen === p.id;
+      const msg = document.getElementById('msg');
+      const card = document.getElementById('roundcard');
+
+      rondas++;
+      if (isRight){
+        aciertos++;
+        msg.innerHTML = `<span class="ok">✅ ¡Correcto!</span>`;
+        nextRound();
+      }else{
+        fallos++;
+        msg.innerHTML = `<span class="bad">❌ Incorrecto. Pasamos a la siguiente.</span>`;
+        // NO revelamos el nombre correcto para no arruinar el juego
+        card.classList.remove('shake');
+        void card.offsetWidth; // reflow
+        card.classList.add('shake');
+        nextRound();
       }
-    } else {
-      fallos++;
-      // quitar opción errónea para hacer más fácil el siguiente intento
-      poolNombres = poolNombres.filter(n => n !== nombreElegido);
-      // refrescar opciones (misma persona, menos distractores)
-      renderObjetivo();
-    }
+    });
+
+    document.getElementById('round').textContent = `Ronda ${rondas}`;
+    document.getElementById('ok').textContent = aciertos;
+    document.getElementById('ko').textContent = fallos;
   }
 
-  async function terminar() {
-    juegoEl.style.display = 'none';
-    finEl.style.display = 'block';
-    const puntosBase = aciertos * 10 - fallos * 10;
-    resumenEl.textContent = `Aciertos: ${aciertos} · Fallos: ${fallos} · Rondas: ${rondas} · Puntos base: ${puntosBase}. Se enviará para cálculo de bonus.`;
-    try {
-      await fetch("{{ url_for('adivina_finalizado') }}", {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({ aciertos, fallos, rondas })
+  function nextRound(){
+    document.getElementById('ok').textContent = aciertos;
+    document.getElementById('ko').textContent = fallos;
+    document.getElementById('round').textContent = `Ronda ${rondas}`;
+    idx++;
+    setTimeout(renderRound, 350);
+  }
+
+  async function finalizar(){
+    // Envia resultados y muestra resumen
+    const payload = {aciertos, fallos, rondas};
+    try{
+      const resp = await fetch('{{ url_for("adivina_finalizado") }}', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
       });
-    } catch(e) {
-      console.error(e);
+      const data = await resp.json();
+      const cont = document.getElementById('game');
+      cont.innerHTML = `
+        <h2>Resultados</h2>
+        <p>✅ Aciertos: <b>${aciertos}</b> &nbsp; ❌ Fallos: <b>${fallos}</b> &nbsp; 🔄 Rondas: <b>${rondas}</b></p>
+        <p>Puntos base: <b>${data.puntos_base}</b> &nbsp; Bonus: <b>${data.puntos_bonus}</b> &nbsp; Total: <b>${data.puntos_total}</b></p>
+        <div class="row" style="margin-top:10px">
+          <a class="btn" href="{{ url_for('index_page') }}">Volver al inicio</a>
+        </div>
+      `;
+      document.getElementById('btn-skip').disabled = true;
+      document.getElementById('btn-final').disabled = true;
+    }catch(e){
+      document.getElementById('game').innerHTML = `
+        <p class="bad">Hubo un problema enviando los resultados. Igual puedes volver al inicio.</p>
+        <div class="row"><a class="btn" href="{{ url_for('index_page') }}">Volver</a></div>
+      `;
     }
   }
 
-  if (participantes.length === 0) {
-    document.querySelector('.card').insertAdjacentHTML('beforeend',
-      '<p class="muted">Aún no hay suficientes personas para jugar.</p>');
-  } else {
-    juegoEl.style.display = 'block';
-    renderObjetivo();
-  }
+  document.getElementById('btn-skip').addEventListener('click', ()=>{
+    // Saltar cuenta como 1 fallo y avanza
+    fallos++; rondas++;
+    nextRound();
+  });
+
+  document.getElementById('btn-final').addEventListener('click', finalizar);
+
+  // Start
+  renderRound();
 </script>
 </body>
 </html>
