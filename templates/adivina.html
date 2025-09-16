@@ -6,18 +6,24 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Adivina Quién</title>
   <style>
-    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial;background:#0b0b0f;color:#eaeaf2;margin:0;padding:24px}
+    :root{--bg:#0b0b0f;--card:#13131a;--edge:#242433;--muted:#a9a9ba;--pill:#161622;--btn:#1e1e2a;--brand:#3a6df0}
+    *{box-sizing:border-box}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial;background:var(--bg);color:#eaeaf2;margin:0;padding:24px}
     .wrap{max-width:900px;margin:0 auto}
-    .card{background:#13131a;border:1px solid #242433;border-radius:16px;padding:24px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+    .card{background:var(--card);border:1px solid var(--edge);border-radius:16px;padding:24px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
     .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
-    .pill{display:inline-block;border:1px solid #2a2a3a;background:#161622;color:#cbd5e1;border-radius:999px;padding:6px 10px;font-size:.95rem}
-    .btn{appearance:none;border:1px solid #3a3a4d;background:#1e1e2a;color:#fff;padding:10px 14px;border-radius:12px;text-decoration:none;cursor:pointer}
-    .btn.primary{background:#3a6df0;border-color:#3a6df0}
-    .btn:disabled{opacity:.5;cursor:not-allowed}
+    .pill{display:inline-block;border:1px solid #2a2a3a;background:var(--pill);color:#cbd5e1;border-radius:999px;padding:6px 10px;font-size:.95rem}
+    .muted{color:var(--muted)}
     .hint{background:#0f1729;border:1px solid #253057;border-radius:10px;padding:10px}
-    .bad{color:#fbbf24}.ok{color:#4ade80}.muted{color:#a9a9ba}
+    .btn{appearance:none;border:1px solid #3a3a4d;background:var(--btn);color:#fff;padding:10px 14px;border-radius:12px;cursor:pointer}
+    .btn.primary{background:var(--brand);border-color:var(--brand)}
+    .btn:disabled{opacity:.55;cursor:not-allowed}
+    .opt{padding:12px;border-radius:12px;border:1px solid #3a3a4d;background:#1e1e2a;color:#fff;cursor:pointer;text-align:left}
+    .opt[disabled]{opacity:.6;cursor:not-allowed}
     .shake{animation:shake .3s linear}
     @keyframes shake{0%{transform:translateX(0)}25%{transform:translateX(-6px)}50%{transform:translateX(6px)}75%{transform:translateX(-3px)}100%{transform:translateX(0)}}
+    .bar{height:8px;background:#222;border-radius:6px;overflow:hidden}
+    .bar>span{display:block;height:100%;background:var(--brand);width:0}
   </style>
 </head>
 <body>
@@ -29,148 +35,180 @@
         <div class="muted">Hola, {{ yo }}. Adivina la persona con base en 3 pistas.</div>
       </div>
       <div class="row">
-        <span class="pill" id="round">Ronda 0</span>
+        <span class="pill" id="round">Ronda 0/5</span>
         <span class="pill">✅ <span id="ok">0</span></span>
         <span class="pill">❌ <span id="ko">0</span></span>
       </div>
     </div>
-    <hr style="border:none;border-top:1px solid #242433;margin:16px 0">
+
+    <div class="bar" style="margin:14px 0 6px"><span id="barfill"></span></div>
+    <hr style="border:none;border-top:1px solid var(--edge);margin:12px 0 16px">
+
     <div id="game"></div>
-    <hr style="border:none;border-top:1px solid #242433;margin:16px 0">
-    <div class="row">
-      <button class="btn" id="btn-skip" type="button">Saltar</button>
-      <button class="btn bad" id="btn-final" type="button">Finalizar partida</button>
-    </div>
+
+    <hr style="border:none;border-top:1px solid var(--edge);margin:16px 0 0">
+    <div class="muted" id="footmsg" style="margin-top:8px">La partida termina automáticamente.</div>
   </div>
 </div>
 
 <script>
-  // Datos del backend
-  const participantes = JSON.parse({{ participantes_json|tojson|safe }});
+(() => {
+  // ==== Config ====
+  const RONDAS_MAX = 5;
 
-  // Estado
+  // ==== Datos del backend ====
+  const PARTICIPANTES = JSON.parse('{{ participantes_json|tojson|safe }}') || [];
+
+  // Si hay menos gente que RONDAS_MAX, jugamos con los que haya.
+  const pool = PARTICIPANTES.slice(0, Math.min(RONDAS_MAX, PARTICIPANTES.length));
+
+  // ==== Estado ====
   let idx = 0;
   let aciertos = 0;
   let fallos = 0;
   let rondas = 0;
+  let finished = false;
 
-  // Util
-  function shuffle(a){ for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];} return a; }
+  // ==== Helpers UI ====
+  const $ = sel => document.querySelector(sel);
+  const game = $('#game');
+  const okEl = $('#ok'), koEl = $('#ko'), roundEl = $('#round'), barfill = $('#barfill');
 
-  function opcionesPara(iObjetivo){
-    // Crea lista de 5 opciones (1 correcta + 4 distractores si hay)
-    const correct = participantes[iObjetivo];
-    const pool = participantes.filter((_,i)=>i!==iObjetivo).map(p=>({id:p.id,nombre:p.nombre}));
-    shuffle(pool);
-    const distractores = pool.slice(0, Math.min(4, pool.length));
-    const opts = [{id:correct.id, nombre:correct.nombre}, ...distractores];
-    return shuffle(opts);
+  function shuffle(a){ const b=a.slice(); for(let i=b.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[b[i],b[j]]=[b[j],b[i]];} return b; }
+  function esc(s){ return String(s||'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#039;'); }
+
+  function headerUpdate(){
+    roundEl.textContent = `Ronda ${Math.min(rondas+1, RONDAS_MAX)}/${RONDAS_MAX}`;
+    okEl.textContent = aciertos;
+    koEl.textContent = fallos;
+    barfill.style.width = `${(rondas / RONDAS_MAX) * 100}%`;
+  }
+
+  function opciones(part){
+    // 4 opciones máximo, incluyendo la correcta
+    const others = pool.filter(p => p.id !== part.id).map(p => ({id:p.id, nombre:p.nombre}));
+    const distract = shuffle(others).slice(0, Math.min(3, others.length));
+    const opts = shuffle([{id: part.id, nombre: part.nombre}, ...distract]);
+    return opts;
   }
 
   function renderRound(){
-    if (idx >= participantes.length){
-      return finalizar();
-    }
-    const p = participantes[idx];
-    const cont = document.getElementById('game');
-    const opts = opcionesPara(idx);
+    if (finished) return;
 
-    cont.innerHTML = `
+    if (rondas >= RONDAS_MAX || idx >= pool.length){
+      finalizar();
+      return;
+    }
+
+    const p = pool[idx];
+    const pistas = (p.pistas||[]).slice(0,3).map(h => `<div class="hint">${esc(h.label)}: <b>${esc(h.text)}</b></div>`).join("") || '<div class="muted">Sin pistas</div>';
+    const opts = opciones(p).map(o => `
+      <button class="opt" data-id="${o.id}">${esc(o.nombre)}</button>
+    `).join("");
+
+    game.innerHTML = `
       <div id="roundcard">
-        <div class="row" style="margin-bottom:10px;gap:8px">
-          ${(p.pistas||[]).map(h=>`<div class="hint">${h.label}: <b>${h.text}</b></div>`).join("")}
-        </div>
-        <label class="muted" for="sel">¿Quién crees que es?</label><br>
-        <select id="sel" style="margin-top:8px;padding:10px;border-radius:10px;background:#0f0f16;color:#fff;border:1px solid #2a2a3a;min-width:260px">
-          <option value="">— Selecciona —</option>
-          ${opts.map(o=>`<option value="${o.id}">${o.nombre}</option>`).join("")}
-        </select>
-        <div class="row" style="margin-top:12px">
-          <button class="btn primary" id="btn-ok" disabled>Validar</button>
-        </div>
-        <div id="msg" class="muted" style="margin-top:10px"></div>
+        <div class="row" style="margin-bottom:10px;gap:8px">${pistas}</div>
+        <div class="row" id="opts" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">${opts}</div>
+        <div id="msg" class="muted" style="margin-top:10px;min-height:24px"></div>
       </div>
     `;
+    headerUpdate();
 
-    const sel = document.getElementById('sel');
-    const btn = document.getElementById('btn-ok');
-    sel.addEventListener('change', ()=> btn.disabled = !sel.value);
-
-    btn.addEventListener('click', ()=>{
-      if (!sel.value) return;
-      const chosen = parseInt(sel.value,10);
-      const isRight = chosen === p.id;
-      const msg = document.getElementById('msg');
-      const card = document.getElementById('roundcard');
-
-      rondas++;
-      if (isRight){
-        aciertos++;
-        msg.innerHTML = `<span class="ok">✅ ¡Correcto!</span>`;
-        nextRound();
-      }else{
-        fallos++;
-        msg.innerHTML = `<span class="bad">❌ Incorrecto. Pasamos a la siguiente.</span>`;
-        // NO revelamos el nombre correcto para no arruinar el juego
-        card.classList.remove('shake');
-        void card.offsetWidth; // reflow
-        card.classList.add('shake');
-        nextRound();
-      }
-    });
-
-    document.getElementById('round').textContent = `Ronda ${rondas}`;
-    document.getElementById('ok').textContent = aciertos;
-    document.getElementById('ko').textContent = fallos;
+    $('#opts').addEventListener('click', onPick);
   }
 
-  function nextRound(){
-    document.getElementById('ok').textContent = aciertos;
-    document.getElementById('ko').textContent = fallos;
-    document.getElementById('round').textContent = `Ronda ${rondas}`;
+  function disableOptions(){
+    document.querySelectorAll('.opt').forEach(b => b.disabled = true);
+    const opts = $('#opts');
+    if (opts) opts.style.pointerEvents = 'none';
+  }
+
+  function onPick(e){
+    const btn = e.target.closest('.opt');
+    if (!btn || finished) return;
+
+    disableOptions();
+
+    const elegido = Number(btn.dataset.id);
+    const correcto = pool[idx].id;
+    const msg = $('#msg');
+    const card = $('#roundcard');
+
+    if (elegido === correcto){
+      aciertos++;
+      msg.innerHTML = '✅ ¡Correcto!';
+    }else{
+      fallos++;
+      msg.innerHTML = '❌ Incorrecto.';
+      // animación leve para feedback
+      card.classList.remove('shake'); void card.offsetWidth; card.classList.add('shake');
+    }
+
+    rondas++;
     idx++;
-    setTimeout(renderRound, 350);
+    headerUpdate();
+
+    setTimeout(() => {
+      if (rondas >= RONDAS_MAX || idx >= pool.length) {
+        finalizar();
+      } else {
+        renderRound();
+      }
+    }, 600);
   }
 
   async function finalizar(){
-    // Envia resultados y muestra resumen
-    const payload = {aciertos, fallos, rondas};
+    if (finished) return;
+    finished = true;
+
+    $('#footmsg').textContent = 'Guardando puntaje…';
     try{
       const resp = await fetch('{{ url_for("adivina_finalizado") }}', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify(payload)
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ aciertos, fallos, rondas })
       });
       const data = await resp.json();
-      const cont = document.getElementById('game');
-      cont.innerHTML = `
-        <h2>Resultados</h2>
-        <p>✅ Aciertos: <b>${aciertos}</b> &nbsp; ❌ Fallos: <b>${fallos}</b> &nbsp; 🔄 Rondas: <b>${rondas}</b></p>
-        <p>Puntos base: <b>${data.puntos_base}</b> &nbsp; Bonus: <b>${data.puntos_bonus}</b> &nbsp; Total: <b>${data.puntos_total}</b></p>
-        <div class="row" style="margin-top:10px">
-          <a class="btn" href="{{ url_for('index_page') }}">Volver al inicio</a>
+      game.innerHTML = `
+        <div style="background:#101018;border:1px solid #2a2a3a;border-radius:16px;padding:22px">
+          <h2 style="margin-top:0">🏁 ¡Partida terminada!</h2>
+          <p>Rondas: <b>${rondas}</b> &middot; Aciertos: <b>${aciertos}</b> &middot; Fallos: <b>${fallos}</b></p>
+          <ul style="margin-left:18px">
+            <li>Puntos base: <b>${data.puntos_base}</b></li>
+            <li>Bonus: <b>${data.puntos_bonus}</b></li>
+            <li>Total: <b>${data.puntos_total}</b></li>
+          </ul>
+          <div class="row" style="margin-top:10px">
+            <a class="btn" href="{{ url_for('index_page') }}">Volver al inicio</a>
+          </div>
         </div>
       `;
-      document.getElementById('btn-skip').disabled = true;
-      document.getElementById('btn-final').disabled = true;
-    }catch(e){
-      document.getElementById('game').innerHTML = `
-        <p class="bad">Hubo un problema enviando los resultados. Igual puedes volver al inicio.</p>
-        <div class="row"><a class="btn" href="{{ url_for('index_page') }}">Volver</a></div>
-      `;
+      $('#footmsg').textContent = 'Resultado guardado.';
+      barfill.style.width = '100%';
+      roundEl.textContent = `Ronda ${RONDAS_MAX}/${RONDAS_MAX}`;
+    }catch(err){
+      game.innerHTML = `
+        <div style="background:#3a1e1e;border:1px solid #7a1f2b;color:#fff;padding:16px;border-radius:12px">
+          Ocurrió un error al guardar el puntaje. Puedes recargar o volver al inicio.
+          <div class="row" style="margin-top:10px">
+            <a class="btn" href="{{ url_for('index_page') }}">Volver</a>
+          </div>
+        </div>`;
+      $('#footmsg').textContent = 'Error al guardar.';
     }
   }
 
-  document.getElementById('btn-skip').addEventListener('click', ()=>{
-    // Saltar cuenta como 1 fallo y avanza
-    fallos++; rondas++;
-    nextRound();
-  });
-
-  document.getElementById('btn-final').addEventListener('click', finalizar);
-
-  // Start
-  renderRound();
+  // Inicio
+  if (pool.length === 0){
+    game.innerHTML = `
+      <div class="muted">No hay suficientes participantes para jugar. Vuelve más tarde.</div>
+    `;
+    $('#footmsg').textContent = '';
+  }else{
+    renderRound();
+  }
+})();
 </script>
 </body>
 </html>

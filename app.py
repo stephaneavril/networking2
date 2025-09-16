@@ -14,7 +14,7 @@ from werkzeug.utils import secure_filename
 
 from flask import (
     Flask, render_template, render_template_string, request, session,
-    redirect, url_for, flash, jsonify
+    redirect, url_for, flash, jsonify, send_from_directory
 )
 from dotenv import load_dotenv
 import psycopg2
@@ -169,6 +169,17 @@ def normalize_schema():
     execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS puntos_base  INTEGER NOT NULL DEFAULT 0;")
     execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS puntos_bonus INTEGER NOT NULL DEFAULT 0;")
     execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS puntos_total INTEGER NOT NULL DEFAULT 0;")
+    # Refuerzo para que ON CONFLICT funcione aunque la tabla viniera sin PK
+    execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_adivina_jugador ON adivina_scores(jugador_id)")
+    execute(r"""
+    DO $$BEGIN
+      BEGIN
+        ALTER TABLE adivina_scores ADD CONSTRAINT adivina_scores_pk PRIMARY KEY (jugador_id);
+      EXCEPTION WHEN duplicate_object THEN PERFORM 1;
+      WHEN others THEN PERFORM 1;
+      END;
+    END$$;
+    """)
 
     # ---- Jugadores: columnas defensivas ----
     sql = r"""
@@ -280,8 +291,6 @@ BEGIN
       ) THEN
         ALTER TABLE conexion_alfa_respuestas ALTER COLUMN correo DROP NOT NULL;
       END IF;
-    ELSE
-      RAISE NOTICE 'No se migra PK: % nulos en jugador_id. Revisa datos.', n_nulls;
     END IF;
   ELSE
     IF EXISTS (
@@ -799,6 +808,7 @@ def admin_panel():
         foto_entries=foto_entries,
         foto_votes_map=foto_votes_map
     )
+
 # ─────────────────────────────────────────────────────────────
 # Reto Foto — Constantes y helpers
 # ─────────────────────────────────────────────────────────────
@@ -842,18 +852,10 @@ def get_votes_map(ch_id: int):
     return {r["entry_id"]: int(r["c"]) for r in rows}
 
 def ensure_default_photo_challenge_from_legacy_flag():
-    """
-    Si el admin activó el reto legado 'Sube tu foto' en la tabla 'retos',
-    asegura que exista/esté activo un registro en 'photo_challenges'.
-    Devuelve el challenge activo o None.
-    """
     ch = get_active_photo_challenge()
     if ch:
         return ch
-
-    # Puente con el flag legado
     if reto_activo("Sube tu foto"):
-        # Si no hay ninguno, creamos uno por defecto y lo activamos
         rows = query("SELECT id FROM photo_challenges ORDER BY created_at DESC LIMIT 1")
         if not rows:
             execute("""
@@ -861,7 +863,6 @@ def ensure_default_photo_challenge_from_legacy_flag():
                 VALUES (%s,%s,TRUE)
             """, ("Sube tu foto", "Comparte tu mejor foto con el equipo",))
         else:
-            # Activar el último creado
             execute("UPDATE photo_challenges SET activo=FALSE")
             execute("""
                 UPDATE photo_challenges
@@ -869,8 +870,20 @@ def ensure_default_photo_challenge_from_legacy_flag():
                  WHERE id=(SELECT id FROM photo_challenges ORDER BY created_at DESC LIMIT 1)
             """)
         return get_active_photo_challenge()
-
     return None
+
+# ─────────────────────────────────────────────────────────────
+# Reto Foto — helpers de FS
+# ─────────────────────────────────────────────────────────────
+def _foto_dir_static(ch_id: int) -> str:
+    return os.path.join(app.static_folder, "fotos_ch", str(ch_id))
+
+TMP_UPLOAD_ROOT = "/tmp/uploads_fotos_ch"
+def _foto_dir_tmp(ch_id: int) -> str:
+    return os.path.join(TMP_UPLOAD_ROOT, str(ch_id))
+
+def _ensure_dir(path: str):
+    os.makedirs(path, exist_ok=True)
 
 # ─────────────────────────────────────────────────────────────
 # Reto Foto — Rutas de usuario
@@ -898,30 +911,71 @@ def reto_foto_subir():
         return redirect(url_for("index_page"))
 
     me = session["jugador_id"]
-    # 1 sola foto por reto
     ya = query("SELECT 1 FROM photo_entries WHERE challenge_id=%s AND jugador_id=%s", (ch["id"], me))
     if ya:
         flash("Ya subiste tu foto para este reto.")
         return redirect(url_for("reto_foto_galeria"))
 
     f = request.files.get("foto")
-    if not f or not f.filename or not _allowed_file(f.filename):
+    if not f or not f.filename:
         flash("Sube una imagen válida (jpg, jpeg, png, gif).")
         return redirect(url_for("reto_foto_home"))
 
-    # Guardado en /static/fotos_ch/<challenge_id>/<archivo>
-    carpeta = os.path.join(app.static_folder, "fotos_ch", str(ch["id"]))
-    os.makedirs(carpeta, exist_ok=True)
+    if "." not in f.filename:
+        flash("El archivo no tiene extensión.")
+        return redirect(url_for("reto_foto_home"))
     ext = f.filename.rsplit(".", 1)[1].lower()
-    fname = secure_filename(f"ch{ch['id']}_u{me}_{int(time.time())}.{ext}")
-    f.save(os.path.join(carpeta, fname))
+    if ext not in ALLOWED_EXTS:
+        flash("Formato no permitido. Usa jpg, jpeg, png o gif.")
+        return redirect(url_for("reto_foto_home"))
 
+    raw_name = f"ch{ch['id']}_u{me}_{int(time.time())}.{ext}"
+    fname = secure_filename(raw_name)
+
+    # Intento 1: guardar bajo /static/fotos_ch/<id>/
+    d_static = _foto_dir_static(ch["id"])
+    _ensure_dir(d_static)
+    p_static = os.path.join(d_static, fname)
+    saved_path = None
+    try:
+        f.stream.seek(0)
+        f.save(p_static)
+        if os.path.exists(p_static):
+            saved_path = ("static", fname)
+    except Exception as e:
+        print(f"[RETO_FOTO] Error guardando en static: {e}")
+
+    # Plan B: /tmp/uploads_fotos_ch/<id>/
+    if not saved_path:
+        d_tmp = _foto_dir_tmp(ch["id"])
+        _ensure_dir(d_tmp)
+        p_tmp = os.path.join(d_tmp, fname)
+        try:
+            f.stream.seek(0)
+            f.save(p_tmp)
+            if os.path.exists(p_tmp):
+                saved_path = ("tmp", fname)
+        except Exception as e:
+            print(f"[RETO_FOTO] Error guardando en /tmp: {e}")
+
+    if not saved_path:
+        flash("No se pudo guardar la foto en el servidor.")
+        return redirect(url_for("reto_foto_home"))
+
+    # Persistir en BD
+    final_filename = fname if saved_path[0] == "static" else f"tmp:{fname}"
     execute(
         "INSERT INTO photo_entries (challenge_id, jugador_id, filename) VALUES (%s,%s,%s)",
-        (ch["id"], me, fname),
+        (ch["id"], me, final_filename),
     )
     flash("¡Foto subida!")
     return redirect(url_for("reto_foto_galeria"))
+
+@app.route("/u_foto/<int:ch_id>/<path:filename>")
+@login_required
+def serve_tmp_upload(ch_id, filename):
+    folder = _foto_dir_tmp(ch_id)
+    return send_from_directory(folder, filename, as_attachment=False)
 
 @app.route("/reto_foto_galeria", methods=["GET"])
 @login_required
@@ -1250,6 +1304,15 @@ def conexion_alfa_form():
     ya = query("SELECT 1 FROM conexion_alfa_respuestas WHERE jugador_id=%s", (me,))
     return render_template("conexion_alfa.html", ya_existe=bool(ya))
 
+def _perfil_ia_ligero(base_row, extra_row):
+    piezas = []
+    for k,label in ALFA_CAMPOS_BASE:
+        v = (base_row or {}).get(k)
+        if v: piezas.append(f"• {label}: {v}.")
+    for k,label in ALFA_CAMPOS_EXTRA:
+        v = (extra_row or {}).get(k)
+        if v: piezas.append(f"• {label}: {v}.")
+    return "\n".join(piezas) or "Perfil en construcción."
 
 @app.route("/conexion_alfa_mi_perfil", methods=["GET"])
 @login_required
@@ -1467,17 +1530,13 @@ def generar_contenido_adivina():
     flash("Adivina Quién usa las respuestas actuales (no requiere pre-carga).")
     return redirect(url_for("admin_panel"))
 
-@app.route("/admin/fix_conexion_alfa_schema")
+# --- Fixers admin (one-click) ---
+@app.route("/admin/fix_conexion_alfa_hard", methods=["POST"])
 @admin_required
-def admin_fix_conexion_alfa_schema():
+def admin_fix_conexion_alfa_hard():
     execute(r"""
-    DO $$
-    DECLARE
-      pk_on_correo text;
-      has_jid boolean;
-      n_nulls int;
-    BEGIN
-      -- Asegura tabla y columnas base
+    DO $$BEGIN
+      -- Asegura tabla base
       CREATE TABLE IF NOT EXISTS conexion_alfa_respuestas (
         jugador_id INTEGER,
         r1 TEXT, r2 TEXT, r3 TEXT, r4 TEXT, r5 TEXT, r6 TEXT, r7 TEXT,
@@ -1485,7 +1544,7 @@ def admin_fix_conexion_alfa_schema():
         updated_at TIMESTAMP DEFAULT NOW()
       );
 
-      -- Asegura jugador_id y backfill desde columna id si existía
+      -- jugador_id y backfill desde id si existía
       IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_name='conexion_alfa_respuestas' AND column_name='jugador_id'
@@ -1502,38 +1561,7 @@ def admin_fix_conexion_alfa_schema():
          WHERE jugador_id IS NULL;
       END IF;
 
-      -- ¿La PK está (todavía) en 'correo'?
-      SELECT c.conname INTO pk_on_correo
-      FROM pg_constraint c
-      JOIN pg_class t ON t.oid = c.conrelid
-      JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
-      WHERE c.contype = 'p'
-        AND t.relname = 'conexion_alfa_respuestas'
-        AND a.attname = 'correo'
-      LIMIT 1;
-
-      -- Si hay registros con jugador_id NULL, no podremos pasar PK a jugador_id.
-      SELECT COUNT(*) INTO n_nulls
-      FROM conexion_alfa_respuestas
-      WHERE jugador_id IS NULL;
-
-      -- Crea PK en jugador_id si es posible
-      IF n_nulls = 0 THEN
-        BEGIN
-          ALTER TABLE conexion_alfa_respuestas
-            ADD CONSTRAINT ca_res_pk PRIMARY KEY (jugador_id);
-        EXCEPTION WHEN duplicate_object THEN
-          -- ya existe, seguimos
-          PERFORM 1;
-        END;
-      END IF;
-
-      -- Si la PK está en correo, quítala (ya tenemos o acabamos de crear la PK en jugador_id)
-      IF pk_on_correo IS NOT NULL THEN
-        EXECUTE format('ALTER TABLE conexion_alfa_respuestas DROP CONSTRAINT %I', pk_on_correo);
-      END IF;
-
-      -- Por si correo/nombre quedaron NOT NULL por algún esquema viejo: relájalos
+      -- Relaja NOT NULL legados
       IF EXISTS (SELECT 1 FROM information_schema.columns
                  WHERE table_name='conexion_alfa_respuestas' AND column_name='correo') THEN
         BEGIN
@@ -1548,14 +1576,48 @@ def admin_fix_conexion_alfa_schema():
         EXCEPTION WHEN others THEN PERFORM 1; END;
       END IF;
 
-      -- Actualiza timestamps por consistencia
-      UPDATE conexion_alfa_respuestas
-         SET updated_at = NOW()
-       WHERE updated_at IS NULL;
-    END
-    $$;
+      -- Quita PK vieja si no es en jugador_id
+      PERFORM 1;
+      -- Crear PK en jugador_id si no hay nulos
+      IF NOT EXISTS (SELECT 1 FROM conexion_alfa_respuestas WHERE jugador_id IS NULL) THEN
+        BEGIN
+          ALTER TABLE conexion_alfa_respuestas ADD CONSTRAINT ca_res_pk PRIMARY KEY (jugador_id);
+        EXCEPTION WHEN duplicate_object THEN PERFORM 1; END;
+      END IF;
+    END$$;
     """)
-    flash("Esquema de Conexión Alfa corregido: PK en jugador_id y correo nullable.")
+    execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS ux_ca_respuestas_jugador_id
+        ON conexion_alfa_respuestas(jugador_id)
+    """)
+    flash("Conexión Alfa saneada: jugador_id como clave y columnas legadas relajadas.")
+    return redirect(url_for("admin_panel"))
+
+@app.route("/admin/fix_adivina_scores", methods=["POST"])
+@admin_required
+def admin_fix_adivina_scores():
+    execute(r"""
+        WITH ranked AS (
+          SELECT ctid, ROW_NUMBER() OVER (
+            PARTITION BY jugador_id ORDER BY created_at DESC
+          ) AS rn
+          FROM adivina_scores
+        )
+        DELETE FROM adivina_scores a
+        USING ranked r
+        WHERE a.ctid = r.ctid AND r.rn > 1;
+    """)
+    execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_adivina_jugador ON adivina_scores(jugador_id)")
+    execute(r"""
+    DO $$BEGIN
+      BEGIN
+        ALTER TABLE adivina_scores ADD CONSTRAINT adivina_scores_pk PRIMARY KEY (jugador_id);
+      EXCEPTION WHEN duplicate_object THEN PERFORM 1;
+      WHEN others THEN PERFORM 1;
+      END;
+    END$$;
+    """)
+    flash("Adivina: limpiado duplicados y creado índice/PK en jugador_id.")
     return redirect(url_for("admin_panel"))
 
 @app.route("/admin/debug_reto_foto")
@@ -1567,9 +1629,12 @@ def admin_debug_reto_foto():
     rows = get_photo_entries(ch["id"])
     lines = []
     for e in rows:
-        path = os.path.join(app.static_folder, "fotos_ch", str(ch["id"]), e["filename"])
-        exists = os.path.exists(path)
-        lines.append(f"{e['id']:>3} | j:{e['jugador_id']:<4} | {e['nombre']:<20} | {e['filename']} | exists={exists} | {path}")
+        # Chequea ambas rutas
+        p_static = os.path.join(app.static_folder, "fotos_ch", str(ch["id"]), e["filename"].replace("tmp:",""))
+        p_tmp = os.path.join(TMP_UPLOAD_ROOT, str(ch["id"]), e["filename"].replace("tmp:",""))
+        exists_static = os.path.exists(p_static)
+        exists_tmp = os.path.exists(p_tmp)
+        lines.append(f"{e['id']:>3} | j:{e['jugador_id']:<4} | {e['nombre']:<20} | {e['filename']} | static={exists_static} | tmp={exists_tmp}")
     return "<pre>" + "\n".join(lines or ["(sin filas)"]) + "</pre>"
 
 # ─────────────────────────────────────────────────────────────
