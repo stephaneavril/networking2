@@ -701,12 +701,19 @@ def adivina():
 def adivina_finalizado():
     data = request.get_json(force=True) or {}
     aciertos = int(data.get("aciertos", 0))
-    fallos = int(data.get("fallos", 0))
-    rondas = int(data.get("rondas", aciertos + fallos))
+    fallos   = int(data.get("fallos", 0))
+    rondas   = int(data.get("rondas", aciertos + fallos))
 
-    puntos_base = aciertos * 10 - fallos * 10
+    puntos_base  = aciertos * 10 - fallos * 10
 
-    pos = query("SELECT COUNT(*) AS c FROM adivina_scores")[0]["c"] + 1
+    me = session["jugador_id"]
+
+    # ¿Ya tenía registro?
+    ya_tenia = bool(query("SELECT 1 FROM adivina_scores WHERE jugador_id=%s LIMIT 1", (me,)))
+    # Posición de llegada (sólo cuenta la primera vez que alguien guarda)
+    total_prev = query("SELECT COUNT(*) AS c FROM adivina_scores")[0]["c"]
+    pos = total_prev + (0 if ya_tenia else 1)
+
     if   pos == 1: puntos_bonus = 50
     elif pos == 2: puntos_bonus = 40
     elif pos == 3: puntos_bonus = 30
@@ -715,20 +722,37 @@ def adivina_finalizado():
 
     puntos_total = puntos_base + puntos_bonus
 
-    execute("""
-        INSERT INTO adivina_scores (jugador_id, aciertos, rondas, fallos, puntos_base, puntos_bonus, puntos_total)
-        VALUES (%s,%s,%s,%s,%s,%s,%s)
-        ON CONFLICT (jugador_id) DO UPDATE
-        SET aciertos=EXCLUDED.aciertos,
-            rondas=EXCLUDED.rondas,
-            fallos=EXCLUDED.fallos,
-            puntos_base=EXCLUDED.puntos_base,
-            puntos_bonus=EXCLUDED.puntos_bonus,
-            puntos_total=EXCLUDED.puntos_total
-    """, (session["jugador_id"], aciertos, rondas, fallos, puntos_base, puntos_bonus, puntos_total))
+    # 1) Intentar UPDATE (devuelve algo si actualizó)
+    updated = query("""
+        UPDATE adivina_scores
+           SET aciertos=%s,
+               rondas=%s,
+               fallos=%s,
+               puntos_base=%s,
+               puntos_bonus=%s,
+               puntos_total=%s
+         WHERE jugador_id=%s
+     RETURNING 1
+    """, (aciertos, rondas, fallos, puntos_base, puntos_bonus, puntos_total, me))
 
+    # 2) Si no actualizó, hacer INSERT simple
+    if not updated:
+        execute("""
+            INSERT INTO adivina_scores
+              (jugador_id, aciertos, rondas, fallos, puntos_base, puntos_bonus, puntos_total)
+            VALUES (%s,%s,%s,%s,%s,%s,%s)
+        """, (me, aciertos, rondas, fallos, puntos_base, puntos_bonus, puntos_total))
+
+    # limpiar el set de juego
     session.pop("adivina_set", None)
-    return jsonify({"ok": True, "pos": pos, "puntos_base": puntos_base, "puntos_bonus": puntos_bonus, "puntos_total": puntos_total})
+
+    return jsonify({
+        "ok": True,
+        "pos": pos,
+        "puntos_base": puntos_base,
+        "puntos_bonus": puntos_bonus,
+        "puntos_total": puntos_total
+    })
 
 # ─────────────────────────────────────────────────────────────
 # Admin Panel + activación de reto (incluye Reto Foto)
