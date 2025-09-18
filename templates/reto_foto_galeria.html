@@ -36,10 +36,26 @@
   <div class="grid">
     {% for e in entries %}
       <div class="tile">
-      <div class="imgwrap">
-  <img loading="lazy" alt="Foto de {{ e.nombre }}"
-       src="{{ url_for('serve_tmp_upload', ch_id=reto.id, filename=e.filename) }}">
+   <div class="imgwrap">
+  {% set fname = e.filename or '' %}
+  {% if fname.startswith('s3:') %}
+    {% set key = fname[3:] %}
+    {% if getenv('S3_PUBLIC_BASE') %}
+      <img loading="lazy" alt="Foto de {{ e.nombre }}"
+           src="{{ getenv('S3_PUBLIC_BASE').rstrip('/') ~ '/' ~ key }}">
+    {% else %}
+      <img loading="lazy" alt="Foto de {{ e.nombre }}"
+           src="{{ url_for('s3_proxy', key=key) }}">
+    {% endif %}
+  {% elif fname.startswith('tmp:') %}
+    <img loading="lazy" alt="Foto de {{ e.nombre }}"
+         src="{{ url_for('serve_tmp_upload', ch_id=reto.id, filename=fname[4:]) }}">
+  {% else %}
+    <img loading="lazy" alt="Foto de {{ e.nombre }}"
+         src="{{ url_for('static', filename='fotos_ch/' ~ reto.id ~ '/' ~ fname) }}">
+  {% endif %}
 </div>
+
 
         <div class="row" style="justify-content:space-between;align-items:center">
           <div><span class="pill">👤 {{ e.nombre }}</span></div>

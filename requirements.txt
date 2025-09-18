@@ -15,3 +15,5 @@ psycopg2-binary==2.9.9  # driver Postgres pre-compilado
 
 # ─── Utilidades ───────────────────────────
 python-dotenv==1.0.1    # para cargar variables de entorno del .env
+
+boto3>=1.34

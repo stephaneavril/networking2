@@ -11,7 +11,36 @@ from collections import Counter
 from difflib import SequenceMatcher
 from threading import Lock
 from werkzeug.utils import secure_filename
+import boto3
 
+S3_BUCKET = os.getenv("S3_BUCKET")
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+S3_PUBLIC_BASE = os.getenv("S3_PUBLIC_BASE")  # ej: https://retofotos.s3.amazonaws.com
+USE_PRESIGNED = (os.getenv("S3_PRESIGN", "0") == "1")
+
+s3 = None
+if S3_BUCKET:
+    s3 = boto3.client("s3", region_name=AWS_REGION)
+
+def s3_put_fileobj(fobj, key, content_type="application/octet-stream"):
+    if not s3:
+        raise RuntimeError("S3 no configurado: falta S3_BUCKET/AWS creds")
+    extra = {"ContentType": content_type}
+    # Si no usamos presigned, hacemos público cada objeto
+    if not USE_PRESIGNED:
+        extra["ACL"] = "public-read"
+    s3.upload_fileobj(fobj, S3_BUCKET, key, ExtraArgs=extra)
+    return key
+
+def s3_url_for_key(key, expires=3600):
+    if not s3:
+        raise RuntimeError("S3 no configurado")
+    if not USE_PRESIGNED and S3_PUBLIC_BASE:
+        return f"{S3_PUBLIC_BASE.rstrip('/')}/{key}"
+    # Presigned temporal
+    return s3.generate_presigned_url(
+        "get_object", Params={"Bucket": S3_BUCKET, "Key": key}, ExpiresIn=expires
+    )
 from flask import (
     Flask, render_template, render_template_string, request, session,
     redirect, url_for, flash, jsonify, send_from_directory
@@ -23,6 +52,7 @@ import psycopg2.extras
 load_dotenv(override=True)
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
+
 app.secret_key = os.getenv("FLASK_SECRET", "change-me")
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "letmein")
 
@@ -720,11 +750,13 @@ def adivina_finalizado():
         score_previo = query("SELECT puntos_bonus FROM adivina_scores WHERE jugador_id=%s", (me,))
         puntos_bonus = score_previo[0]['puntos_bonus'] if score_previo else 0
 
-    puntos_total = puntos_base + puntos_bonus
-
     # --- INICIO DE LA CORRECCIÓN ---
-    # La base de datos espera un valor en la columna "puntaje".
-    # Le pasaremos el valor de "puntos_total" para satisfacer este requisito.
+    # Se calcula el total y se usa max(0, ...) para asegurar que el puntaje mínimo sea 0.
+    puntos_total_calculado = puntos_base + puntos_bonus
+    puntos_total = max(0, puntos_total_calculado)
+    # --- FIN DE LA CORRECCIÓN ---
+
+    # Guardado en la base de datos (incluyendo la columna 'puntaje' para compatibilidad)
     execute("""
         INSERT INTO adivina_scores
           (jugador_id, aciertos, rondas, fallos, puntos_base, puntos_bonus, puntos_total, puntaje)
@@ -736,8 +768,7 @@ def adivina_finalizado():
           puntos_base = EXCLUDED.puntos_base,
           puntos_total = EXCLUDED.puntos_total,
           puntaje = EXCLUDED.puntaje;
-    """, (me, aciertos, rondas, fallos, puntos_base, puntos_bonus, puntos_total, puntos_total)) # <-- Se añade puntos_total una vez más
-    # --- FIN DE LA CORRECCIÓN ---
+    """, (me, aciertos, rondas, fallos, puntos_base, puntos_bonus, puntos_total, puntos_total))
 
     session.pop("adivina_set", None)
 
@@ -745,7 +776,7 @@ def adivina_finalizado():
         "ok": True,
         "puntos_base": puntos_base,
         "puntos_bonus": puntos_bonus,
-        "puntos_total": puntos_total
+        "puntos_total": puntos_total # Ahora se enviará 0 en lugar de -50
     })
 
 # ─────────────────────────────────────────────────────────────
@@ -941,39 +972,48 @@ def reto_foto_subir():
         return redirect(url_for("index_page"))
 
     me = session["jugador_id"]
-    if query("SELECT 1 FROM photo_entries WHERE challenge_id=%s AND jugador_id=%s", (ch["id"], me)):
+    ya = query("SELECT 1 FROM photo_entries WHERE challenge_id=%s AND jugador_id=%s", (ch["id"], me))
+    if ya:
         flash("Ya subiste tu foto para este reto.")
         return redirect(url_for("reto_foto_galeria"))
 
     f = request.files.get("foto")
-    if not f or not f.filename or not _allowed_file(f.filename):
+    if not f or not f.filename:
         flash("Sube una imagen válida (jpg, jpeg, png, gif).")
         return redirect(url_for("reto_foto_home"))
 
-    ext = f.filename.rsplit(".", 1)[1].lower()
-    raw_name = f"ch{ch['id']}_u{me}_{int(time.time())}.{ext}"
-    fname = secure_filename(raw_name)
-
-    # --- LÓGICA DE GUARDADO SIMPLIFICADA ---
-    # Usamos una carpeta temporal que es más probable que funcione en cualquier servidor
-    upload_dir = _foto_dir_tmp(ch["id"])
-    _ensure_dir(upload_dir)
-    save_path = os.path.join(upload_dir, fname)
-
-    try:
-        f.save(save_path)
-    except Exception as e:
-        print(f"[RETO_FOTO] Error al guardar la foto en {save_path}: {e}")
-        flash("No se pudo guardar la foto en el servidor.")
+    if "." not in f.filename:
+        flash("El archivo no tiene extensión.")
         return redirect(url_for("reto_foto_home"))
 
-    # Guardamos el nombre del archivo SIN el prefijo "tmp:"
+    ext = f.filename.rsplit(".", 1)[1].lower()
+    if ext not in ALLOWED_EXTS:
+        flash("Formato no permitido. Usa jpg, jpeg, png o gif.")
+        return redirect(url_for("reto_foto_home"))
+
+    # === Subida a S3 ===
+    if not S3_BUCKET:
+        flash("S3 no está configurado en el servidor.")
+        return redirect(url_for("reto_foto_home"))
+
+    key = f"ch/{ch['id']}/u{me}_{int(time.time())}.{ext}"
+    # Si el navegador no envía mimetype, usamos un fallback razonable
+    ctype = f.mimetype or f"image/{'jpeg' if ext=='jpg' else ext}"
+
+    # reset y subir
+    f.stream.seek(0)
+    s3_put_fileobj(f.stream, key, content_type=ctype)
+
+    # guardamos en BD con prefijo 's3:'
+    final_filename = f"s3:{key}"
     execute(
         "INSERT INTO photo_entries (challenge_id, jugador_id, filename) VALUES (%s,%s,%s)",
-        (ch["id"], me, fname),
+        (ch["id"], me, final_filename),
     )
-    flash("¡Foto subida!")
+
+    flash("¡Foto subida a S3!")
     return redirect(url_for("reto_foto_galeria"))
+
 
 @app.route("/u_foto/<int:ch_id>/<path:filename>")
 @login_required
