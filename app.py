@@ -703,16 +703,11 @@ def adivina_finalizado():
     aciertos = int(data.get("aciertos", 0))
     fallos   = int(data.get("fallos", 0))
     rondas   = int(data.get("rondas", aciertos + fallos))
-
     puntos_base  = aciertos * 10 - fallos * 10
-
     me = session["jugador_id"]
 
-    # --- INICIO DE LA CORRECCIÓN ---
-    # Para calcular el bonus, primero vemos si el jugador ya tenía un score guardado.
     ya_tenia = bool(query("SELECT 1 FROM adivina_scores WHERE jugador_id=%s LIMIT 1", (me,)))
 
-    # Posición de llegada (sólo cuenta la primera vez)
     if not ya_tenia:
         total_prev = query("SELECT COUNT(*) AS c FROM adivina_scores")[0]["c"]
         pos = total_prev + 1
@@ -722,28 +717,28 @@ def adivina_finalizado():
         elif pos == 4: puntos_bonus = 20
         else:          puntos_bonus = 10
     else:
-        # Si ya tenía, recuperamos su bonus anterior para no sobreescribirlo
         score_previo = query("SELECT puntos_bonus FROM adivina_scores WHERE jugador_id=%s", (me,))
         puntos_bonus = score_previo[0]['puntos_bonus'] if score_previo else 0
 
     puntos_total = puntos_base + puntos_bonus
 
-    # Usamos INSERT ON CONFLICT para una operación atómica y segura en PostgreSQL
+    # --- INICIO DE LA CORRECCIÓN ---
+    # La base de datos espera un valor en la columna "puntaje".
+    # Le pasaremos el valor de "puntos_total" para satisfacer este requisito.
     execute("""
         INSERT INTO adivina_scores
-          (jugador_id, aciertos, rondas, fallos, puntos_base, puntos_bonus, puntos_total)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
+          (jugador_id, aciertos, rondas, fallos, puntos_base, puntos_bonus, puntos_total, puntaje)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (jugador_id) DO UPDATE SET
           aciertos = EXCLUDED.aciertos,
           rondas = EXCLUDED.rondas,
           fallos = EXCLUDED.fallos,
           puntos_base = EXCLUDED.puntos_base,
-          -- No actualizamos el bonus si ya existía para mantener el de la primera vez
-          puntos_total = EXCLUDED.puntos_total;
-    """, (me, aciertos, rondas, fallos, puntos_base, puntos_bonus, puntos_total))
+          puntos_total = EXCLUDED.puntos_total,
+          puntaje = EXCLUDED.puntaje;
+    """, (me, aciertos, rondas, fallos, puntos_base, puntos_bonus, puntos_total, puntos_total)) # <-- Se añade puntos_total una vez más
     # --- FIN DE LA CORRECCIÓN ---
 
-    # limpiar el set de juego
     session.pop("adivina_set", None)
 
     return jsonify({
