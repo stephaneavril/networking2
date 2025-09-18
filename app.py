@@ -1322,29 +1322,17 @@ def conexion_alfa_form():
     if request.method == "POST":
         data = {f"r{k}": (request.form.get(f"r{k}") or "").strip() for k in range(1, 8)}
 
-        # Parche defensivo por si la BBDD aún tiene NOT NULL/PK legadas en columnas antiguas
-        execute(r"""
-        DO $$BEGIN
-          IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='conexion_alfa_respuestas' AND column_name='correo' AND is_nullable='NO'
-          ) THEN
-            BEGIN
-              ALTER TABLE conexion_alfa_respuestas ALTER COLUMN correo DROP NOT NULL;
-            EXCEPTION WHEN others THEN PERFORM 1; END;
-          END IF;
+        # 💡 Parche inmediato: relaja NOT NULL si quedaron columnas legadas
+        try:
+            execute("ALTER TABLE conexion_alfa_respuestas ALTER COLUMN correo DROP NOT NULL;")
+        except Exception:
+            pass
+        try:
+            execute("ALTER TABLE conexion_alfa_respuestas ALTER COLUMN nombre DROP NOT NULL;")
+        except Exception:
+            pass
 
-          IF EXISTS (
-            SELECT 1 FROM information_schema.columns
-            WHERE table_name='conexion_alfa_respuestas' AND column_name='nombre' AND is_nullable='NO'
-          ) THEN
-            BEGIN
-              ALTER TABLE conexion_alfa_respuestas ALTER COLUMN nombre DROP NOT NULL;
-            EXCEPTION WHEN others THEN PERFORM 1; END;
-          END IF;
-        END$$;
-        """)
-
+        # Guarda/actualiza las respuestas
         execute("""
             INSERT INTO conexion_alfa_respuestas (jugador_id, r1, r2, r3, r4, r5, r6, r7)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
@@ -1354,7 +1342,7 @@ def conexion_alfa_form():
                   updated_at=NOW()
         """, (me, data["r1"], data["r2"], data["r3"], data["r4"], data["r5"], data["r6"], data["r7"]))
 
-        # Intento de autogenerar el match y redirigir directamente al análisis
+        # Intenta generar/asegurar un match y llevar al análisis
         try:
             _auto_match_para(me)
         except Exception:

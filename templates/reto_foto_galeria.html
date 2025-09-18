@@ -37,20 +37,22 @@
     {% for e in entries %}
       <div class="tile">
         <div class="imgwrap">
-          <img loading="lazy" alt="Foto de {{ e.nombre }}"
-               src="{{ url_for('static', filename='fotos_ch/' ~ reto.id ~ '/' ~ e.filename) }}">
+          {# Mostrar desde /tmp si el nombre viene con 'tmp:'; si no, servir desde /static y caer a /u_foto si no existe #}
+          {% set fname = e.filename or '' %}
+          {% if fname.startswith('tmp:') %}
+            <img loading="lazy" alt="Foto de {{ e.nombre }}"
+                 src="{{ url_for('serve_tmp_upload', ch_id=reto.id, filename=fname[4:]) }}">
+          {% else %}
+            <img loading="lazy" alt="Foto de {{ e.nombre }}"
+                 src="{{ url_for('static', filename='fotos_ch/' ~ reto.id ~ '/' ~ fname) }}"
+                 onerror="this.onerror=null;this.src='{{ url_for('serve_tmp_upload', ch_id=reto.id, filename=fname) }}'">
+          {% endif %}
         </div>
+
         <div class="row" style="justify-content:space-between;align-items:center">
           <div><span class="pill">👤 {{ e.nombre }}</span></div>
           <div><span class="pill">⭐ {{ votes_map.get(e.id, 0) }}</span></div>
         </div>
-
-        {% set ya_votaste_esta = false %}
-        {% if session and session.get('jugador_id') %}
-          {# No sabemos aquí si ya votaste esta específica; el backend lo valida.
-             Mostramos ambos botones según reglas simples: #}
-          {% set ya_votaste_esta = False %}
-        {% endif %}
 
         {% if e.jugador_id == session.get('jugador_id') %}
           <p class="muted">No puedes votar tu propia foto.</p>

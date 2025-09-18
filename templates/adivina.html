@@ -43,38 +43,29 @@
 <script>
   const participantes = JSON.parse({{ participantes_json|tojson|safe }});
 
-  // Si por alguna razón el servidor nos devuelve 0 (no debería, hay guardas), mostramos mensaje.
-  if (!Array.isArray(participantes) || participantes.length === 0){
-    document.getElementById('game').innerHTML =
-      '<p class="muted">Aún no hay suficientes participantes para jugar. Vuelve más tarde.</p>';
-  }
-
-  // Estado
-  let idx = 0;
-  let aciertos = 0;
-  let fallos = 0;
-  let rondas = 0;
-  const TOTAL = participantes.length;  // hasta 10, sin incluirte a ti
+  let idx = 0, aciertos = 0, fallos = 0, rondas = 0;
+  const TOTAL = participantes.length;
   document.getElementById('total').textContent = TOTAL;
+
+  if (!TOTAL){
+    document.getElementById('game').innerHTML =
+      '<p class="muted">Aún no hay suficientes compañer@s con formulario para jugar.</p>';
+  }
 
   function shuffle(a){ for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];} return a; }
 
-  function opcionesPara(iObjetivo){
-    const correct = participantes[iObjetivo];
-    const pool = participantes.filter((_,i)=>i!==iObjetivo).map(p=>({id:p.id,nombre:p.nombre}));
+  function opcionesPara(i){
+    const correct = participantes[i];
+    const pool = participantes.filter((_,k)=>k!==i).map(p=>({id:p.id,nombre:p.nombre}));
     shuffle(pool);
-    const distractores = pool.slice(0, Math.min(4, pool.length));
-    const opts = [{id:correct.id, nombre:correct.nombre}, ...distractores];
-    return shuffle(opts);
+    return shuffle([{id:correct.id,nombre:correct.nombre}, ...pool.slice(0,4)]);
   }
 
   function renderRound(){
-    if (idx >= TOTAL){
-      return finalizar();
-    }
+    if (idx >= TOTAL) return finalizar();
     const p = participantes[idx];
-    const cont = document.getElementById('game');
     const opts = opcionesPara(idx);
+    const cont = document.getElementById('game');
 
     cont.innerHTML = `
       <div id="roundcard">
@@ -99,70 +90,31 @@
 
     btn.addEventListener('click', ()=>{
       if (!sel.value) return;
-      const chosen = parseInt(sel.value,10);
-      const isRight = chosen === p.id;
+      const isRight = parseInt(sel.value,10) === p.id;
       const msg = document.getElementById('msg');
       const card = document.getElementById('roundcard');
-
       rondas++;
-      if (isRight){
-        aciertos++;
-        msg.innerHTML = `<span class="ok">✅ ¡Correcto!</span>`;
-      }else{
-        fallos++;
-        msg.innerHTML = `<span class="bad">❌ Incorrecto.</span>`;
-        card.classList.remove('shake'); void card.offsetWidth; card.classList.add('shake');
-      }
-
+      if (isRight){ aciertos++; msg.innerHTML = `<span class="ok">✅ ¡Correcto!</span>`; }
+      else { fallos++; msg.innerHTML = `<span class="bad">❌ Incorrecto.</span>`; card.classList.remove('shake'); void card.offsetWidth; card.classList.add('shake'); }
       document.getElementById('ok').textContent = aciertos;
       document.getElementById('ko').textContent = fallos;
       document.getElementById('round').innerHTML = `Ronda ${rondas}/<span id="total">${TOTAL}</span>`;
-
-      idx++;
-      setTimeout(renderRound, 350);
+      idx++; setTimeout(renderRound, 350);
     });
 
     document.getElementById('round').innerHTML = `Ronda ${rondas}/<span id="total">${TOTAL}</span>`;
-    document.getElementById('ok').textContent = aciertos;
-    document.getElementById('ko').textContent = fallos;
   }
 
   async function finalizar(){
     const payload = {aciertos, fallos, rondas};
-    let resumen = `
-      <h2>Resultados</h2>
-      <p>✅ Aciertos: <b>${aciertos}</b> &nbsp; ❌ Fallos: <b>${fallos}</b> &nbsp; 🔄 Rondas: <b>${rondas}</b> de <b>${TOTAL}</b></p>
-    `;
+    let html = `<h2>Resultados</h2>
+                <p>✅ <b>${aciertos}</b> · ❌ <b>${fallos}</b> · 🔄 <b>${rondas}</b> de <b>${TOTAL}</b></p>`;
     try{
-      const resp = await fetch('{{ url_for("adivina_finalizado") }}', {
-        method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)
-      });
+      const resp = await fetch('{{ url_for("adivina_finalizado") }}',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
       const data = await resp.json();
-      resumen += `<p>Puntos base: <b>${data.puntos_base}</b> &nbsp; Bonus: <b>${data.puntos_bonus}</b> &nbsp; Total: <b>${data.puntos_total}</b></p>`;
-    }catch(e){
-      resumen += `<p class="bad">No pude registrar el puntaje, pero tu partida terminó.</p>`;
-    }
-
-    // Ranking (si el endpoint existe)
-    let tabla = '';
-    try{
-      const r = await fetch('{{ url_for("adivina_scores_top") if "adivina_scores_top" in globals() else "#" }}');
-      if (r.ok){
-        const top = await r.json();
-        if (Array.isArray(top) && top.length){
-          tabla = `<h3>Top 10</h3>
-          <ol>${top.map(x=>`<li>${x.nombre} — ${x.puntos_total} pts (✅${x.aciertos}/❌${x.fallos})</li>`).join("")}</ol>`;
-        }
-      }
-    }catch(_){}
-
-    document.getElementById('game').innerHTML = `
-      ${resumen}
-      ${tabla}
-      <div class="row" style="margin-top:10px">
-        <a class="btn" href="{{ url_for('index_page') }}">Volver al inicio</a>
-      </div>
-    `;
+      html += `<p>Puntos base: <b>${data.puntos_base}</b> · Bonus: <b>${data.puntos_bonus}</b> · Total: <b>${data.puntos_total}</b></p>`;
+    }catch(_){ html += `<p class="bad">No pude registrar tu puntaje, pero tu partida terminó.</p>`; }
+    document.getElementById('game').innerHTML = html + `<div class="row" style="margin-top:10px"><a class="btn" href="{{ url_for('index_page') }}">Volver al inicio</a></div>`;
   }
 
   renderRound();
