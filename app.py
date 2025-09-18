@@ -516,6 +516,7 @@ def home():
 @app.route("/index.html")
 @login_required
 def index_page():
+    session.pop("adivina_set", None)
     me = session["jugador_id"]
     ya_respondio = bool(get_respuestas(me))
 
@@ -571,6 +572,7 @@ def login_route():
 
 @app.route("/logout")
 def logout():
+    session.pop("adivina_set", None)
     session.clear()
     return redirect(url_for("login"))
 
@@ -673,16 +675,26 @@ def adivina():
     if not reto_activo("Adivina Quién"):
         flash("Adivina Quién aún no está activo. Espera a que el administrador lo habilite.")
         return redirect(url_for("index_page"))
+
     me = session["jugador_id"]
+
+    # Si el set existe pero está vacío (pudo quedar cacheado), lo regeneramos
     participantes = session.get("adivina_set")
     if not participantes:
         participantes = _participantes_para_juego(me, n=10)  # máximo 10
         session["adivina_set"] = participantes
+
+    # Guardas: si sigue sin haber participantes distintos a ti con respuestas, avisa.
+    if not participantes:
+        flash("Aún no hay suficientes personas con formulario para jugar. Invita a alguien más a completar sus respuestas 🙂")
+        return redirect(url_for("index_page"))
+
     return render_template(
         "adivina.html",
         yo=session.get("nombre",""),
         participantes_json=json.dumps(participantes, ensure_ascii=False)
     )
+
 
 @app.route("/adivina_finalizado", methods=["POST"])
 @login_required
@@ -1220,6 +1232,49 @@ def _greedy_one_to_one(pers, sim):
         pairs.append((i,j,sc))
     return pairs
 
+def _auto_match_para(jugador_id: int):
+    """Si el jugador no tiene match aún, calcula su mejor pareja y la guarda."""
+    _ensure_tablas_conexion_alfa()
+    personas = _get_personas_con_perfil()
+    if len(personas) < 2:
+        return
+
+    pos_por_id = {p["id"]: i for i, p in enumerate(personas)}
+    if jugador_id not in pos_por_id:
+        return
+
+    # ¿ya tiene match?
+    ya = query("SELECT 1 FROM conexion_alfa_matches WHERE jugador_1_id=%s LIMIT 1", (jugador_id,))
+    if ya:
+        return
+
+    # Vectorizado simple: similitudes sólo contra este jugador
+    tfs = [_tf(_perfil_texto_agregado(p["base"], p["extra"])) for p in personas]
+    i = pos_por_id[jugador_id]
+    mejor_j, mejor_s = None, -1.0
+    for j in range(len(personas)):
+        if j == i:
+            continue
+        s = _cosine_tf(tfs[i], tfs[j])
+        if s > mejor_s:
+            mejor_s, mejor_j = s, j
+
+    if mejor_j is None:
+        return
+
+    p1, p2 = personas[i], personas[mejor_j]
+    # Evitar duplicados
+    dup = query("""
+        SELECT 1 FROM conexion_alfa_matches
+        WHERE (jugador_1_id=%s AND jugador_2_id=%s)
+           OR (jugador_1_id=%s AND jugador_2_id=%s) LIMIT 1
+    """, (p1["id"], p2["id"], p2["id"], p1["id"]))
+    if dup:
+        return
+
+    razon = _explicacion_match(p1["base"], p1["extra"], p2["base"], p2["extra"], mejor_s)
+    _insertar_match_bidireccional(p1["id"], p2["id"], float(mejor_s), razon)
+
 @app.route("/generar_matches_conexion_alfa", methods=["POST"])
 @admin_required
 def generar_matches_conexion_alfa():
@@ -1258,16 +1313,16 @@ def generar_matches_conexion_alfa():
         MATCH_BUILD_LOCK.release()
 
 # Formulario Conexión Alfa
-@app.route("/conexion_alfa_form", methods=["GET","POST"])
+@app.route("/conexion_alfa_form", methods=["GET", "POST"])
 @login_required
 def conexion_alfa_form():
     _ensure_tablas_conexion_alfa()
     me = session["jugador_id"]
 
     if request.method == "POST":
-        data = {f"r{k}": (request.form.get(f"r{k}") or "").strip() for k in range(1,8)}
+        data = {f"r{k}": (request.form.get(f"r{k}") or "").strip() for k in range(1, 8)}
 
-        # Parche defensivo por si la BBDD aún tiene NOT NULL en columnas legadas
+        # Parche defensivo por si la BBDD aún tiene NOT NULL/PK legadas en columnas antiguas
         execute(r"""
         DO $$BEGIN
           IF EXISTS (
@@ -1291,16 +1346,23 @@ def conexion_alfa_form():
         """)
 
         execute("""
-            INSERT INTO conexion_alfa_respuestas (jugador_id, r1,r2,r3,r4,r5,r6,r7)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
+            INSERT INTO conexion_alfa_respuestas (jugador_id, r1, r2, r3, r4, r5, r6, r7)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (jugador_id) DO UPDATE
               SET r1=EXCLUDED.r1, r2=EXCLUDED.r2, r3=EXCLUDED.r3,
                   r4=EXCLUDED.r4, r5=EXCLUDED.r5, r6=EXCLUDED.r6, r7=EXCLUDED.r7,
                   updated_at=NOW()
         """, (me, data["r1"], data["r2"], data["r3"], data["r4"], data["r5"], data["r6"], data["r7"]))
-        flash("¡Gracias! Tus respuestas fueron guardadas.")
-        return redirect(url_for("conexion_alfa_mi_perfil"))
 
+        # Intento de autogenerar el match y redirigir directamente al análisis
+        try:
+            _auto_match_para(me)
+        except Exception:
+            pass
+
+        return redirect(url_for("conexion_alfa_mi_match"))
+
+    # GET: mostrar si ya existe el formulario
     ya = query("SELECT 1 FROM conexion_alfa_respuestas WHERE jugador_id=%s", (me,))
     return render_template("conexion_alfa.html", ya_existe=bool(ya))
 
