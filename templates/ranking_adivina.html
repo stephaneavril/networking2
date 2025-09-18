@@ -16,16 +16,23 @@
       width:90%;
       border-collapse:collapse;
       box-shadow:0 0 15px rgba(0,0,0,.4);
+      border-radius:12px;
+      overflow:hidden;
     }
     th,td{padding:12px}
     th{
-      background:#ec1c24;      /* pon aquí el púrpura AZ si lo prefieres */
+      background:#ec1c24;
       color:#fff;
+      text-transform:uppercase;
+      letter-spacing:.5px;
+      font-weight:600;
     }
-    tr:nth-child(even){background:#14163a}
+    tbody tr{background:#121437}
+    tbody tr:nth-child(even){background:#14163a}
     tr.highlight{
-      background:#1f2140;
-      font-weight:bold;
+      background:#1f214a !important;
+      font-weight:700;
+      outline:2px solid rgba(255,255,255,.08);
     }
     a{color:#ec1c24;text-decoration:none}
   </style>
@@ -45,13 +52,15 @@
     </thead>
     <tbody>
     {% for r in resultados %}
-      <tr {% if mi_resultado and r['nombre_jugador']==mi_resultado['nombre_jugador'] %}class="highlight"{% endif %}>
+      <tr {% if mi_resultado and r['nombre_jugador'] == mi_resultado['nombre_jugador'] %}class="highlight"{% endif %}>
         <td>{{ loop.index }}</td>
         <td>{{ r['nombre_jugador'] }}</td>
         <td>{{ r['aciertos'] }}</td>
         <td>{{ r['puntos_extra'] }}</td>
         <td>{{ r['total'] }}</td>
       </tr>
+    {% else %}
+      <tr><td colspan="5">Sin puntajes todavía.</td></tr>
     {% endfor %}
     </tbody>
   </table>

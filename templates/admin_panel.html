@@ -111,6 +111,9 @@
   </tr>
   {% endfor %}
 </table>
+<form method="post" action="{{ url_for('admin_reset_adivina_scores') }}" style="display:inline">
+  <button class="btn danger" type="submit">Reiniciar scores de Adivina</button>
+</form>
 
 <!-- Reset general: solo Eliminar Todos -->
 <h2>🧹 Administración</h2>

@@ -1612,6 +1612,15 @@ def generar_contenido_adivina():
     flash("Adivina Quién usa las respuestas actuales (no requiere pre-carga).")
     return redirect(url_for("admin_panel"))
 
+# Resetear todos los puntajes de Adivina (sin borrar jugadores)
+@app.route("/admin/reset_adivina_scores", methods=["POST"])
+@admin_required
+def admin_reset_adivina_scores():
+    execute("TRUNCATE TABLE adivina_scores RESTART IDENTITY;")
+    flash("✅ Scores de Adivina reiniciados.")
+    return redirect(url_for("admin_panel"))
+
+
 # --- Fixers admin (one-click) ---
 @app.route("/admin/fix_conexion_alfa_hard", methods=["POST"])
 @admin_required
@@ -1674,6 +1683,21 @@ def admin_fix_conexion_alfa_hard():
     """)
     flash("Conexión Alfa saneada: jugador_id como clave y columnas legadas relajadas.")
     return redirect(url_for("admin_panel"))
+
+@app.route("/adivina_ranking", methods=["GET"])
+@login_required
+def adivina_ranking():
+    rows = query("""
+        SELECT j.nombre,
+               s.aciertos,
+               s.puntos_bonus,
+               s.puntos_total
+        FROM adivina_scores s
+        JOIN jugadores j ON j.id = s.jugador_id
+        ORDER BY s.puntos_total DESC, s.created_at ASC
+    """)
+    return render_template("ranking_adivina.html", rows=rows)
+
 
 @app.route("/admin/fix_adivina_scores", methods=["POST"])
 @admin_required
