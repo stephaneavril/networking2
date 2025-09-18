@@ -708,47 +708,46 @@ def adivina_finalizado():
 
     me = session["jugador_id"]
 
-    # ¿Ya tenía registro?
+    # --- INICIO DE LA CORRECCIÓN ---
+    # Para calcular el bonus, primero vemos si el jugador ya tenía un score guardado.
     ya_tenia = bool(query("SELECT 1 FROM adivina_scores WHERE jugador_id=%s LIMIT 1", (me,)))
-    # Posición de llegada (sólo cuenta la primera vez que alguien guarda)
-    total_prev = query("SELECT COUNT(*) AS c FROM adivina_scores")[0]["c"]
-    pos = total_prev + (0 if ya_tenia else 1)
 
-    if   pos == 1: puntos_bonus = 50
-    elif pos == 2: puntos_bonus = 40
-    elif pos == 3: puntos_bonus = 30
-    elif pos == 4: puntos_bonus = 20
-    else:          puntos_bonus = 10
+    # Posición de llegada (sólo cuenta la primera vez)
+    if not ya_tenia:
+        total_prev = query("SELECT COUNT(*) AS c FROM adivina_scores")[0]["c"]
+        pos = total_prev + 1
+        if   pos == 1: puntos_bonus = 50
+        elif pos == 2: puntos_bonus = 40
+        elif pos == 3: puntos_bonus = 30
+        elif pos == 4: puntos_bonus = 20
+        else:          puntos_bonus = 10
+    else:
+        # Si ya tenía, recuperamos su bonus anterior para no sobreescribirlo
+        score_previo = query("SELECT puntos_bonus FROM adivina_scores WHERE jugador_id=%s", (me,))
+        puntos_bonus = score_previo[0]['puntos_bonus'] if score_previo else 0
 
     puntos_total = puntos_base + puntos_bonus
 
-    # 1) Intentar UPDATE (devuelve algo si actualizó)
-    updated = query("""
-        UPDATE adivina_scores
-           SET aciertos=%s,
-               rondas=%s,
-               fallos=%s,
-               puntos_base=%s,
-               puntos_bonus=%s,
-               puntos_total=%s
-         WHERE jugador_id=%s
-     RETURNING 1
-    """, (aciertos, rondas, fallos, puntos_base, puntos_bonus, puntos_total, me))
-
-    # 2) Si no actualizó, hacer INSERT simple
-    if not updated:
-        execute("""
-            INSERT INTO adivina_scores
-              (jugador_id, aciertos, rondas, fallos, puntos_base, puntos_bonus, puntos_total)
-            VALUES (%s,%s,%s,%s,%s,%s,%s)
-        """, (me, aciertos, rondas, fallos, puntos_base, puntos_bonus, puntos_total))
+    # Usamos INSERT ON CONFLICT para una operación atómica y segura en PostgreSQL
+    execute("""
+        INSERT INTO adivina_scores
+          (jugador_id, aciertos, rondas, fallos, puntos_base, puntos_bonus, puntos_total)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (jugador_id) DO UPDATE SET
+          aciertos = EXCLUDED.aciertos,
+          rondas = EXCLUDED.rondas,
+          fallos = EXCLUDED.fallos,
+          puntos_base = EXCLUDED.puntos_base,
+          -- No actualizamos el bonus si ya existía para mantener el de la primera vez
+          puntos_total = EXCLUDED.puntos_total;
+    """, (me, aciertos, rondas, fallos, puntos_base, puntos_bonus, puntos_total))
+    # --- FIN DE LA CORRECCIÓN ---
 
     # limpiar el set de juego
     session.pop("adivina_set", None)
 
     return jsonify({
         "ok": True,
-        "pos": pos,
         "puntos_base": puntos_base,
         "puntos_bonus": puntos_bonus,
         "puntos_total": puntos_total
@@ -1693,7 +1692,19 @@ def admin_fix_adivina_scores():
     """)
     flash("Adivina: limpiado duplicados y creado índice/PK en jugador_id.")
     return redirect(url_for("admin_panel"))
-
+@app.route("/ranking_adivina")
+@login_required
+def ranking_adivina():
+    resultados = query("""
+      SELECT j.nombre AS nombre_jugador,
+             s.puntos_total,
+             s.aciertos,
+             s.rondas
+      FROM adivina_scores s
+      JOIN jugadores j ON j.id = s.jugador_id
+      ORDER BY s.puntos_total DESC, s.created_at ASC
+    """)
+    return render_template("ranking_adivina.html", resultados=resultados)
 @app.route("/admin/debug_reto_foto")
 @admin_required
 def admin_debug_reto_foto():

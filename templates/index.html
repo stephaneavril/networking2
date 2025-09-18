@@ -48,6 +48,8 @@
           <p class="ok">✅ Listo para jugar. Selección aleatoria de 5 personas (no te incluye).</p>
           <div class="row">
             <a class="btn primary" href="{{ url_for('adivina') }}">Jugar ahora</a>
+                <a class="btn" href="{{ url_for('ranking_adivina') }}">Ver Ranking</a>
+
           </div>
         {% else %}
           <p class="muted">Completa tus respuestas para poder jugar.</p>
