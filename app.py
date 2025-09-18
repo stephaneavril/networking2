@@ -946,62 +946,36 @@ def reto_foto_subir():
         return redirect(url_for("index_page"))
 
     me = session["jugador_id"]
-    ya = query("SELECT 1 FROM photo_entries WHERE challenge_id=%s AND jugador_id=%s", (ch["id"], me))
-    if ya:
+    if query("SELECT 1 FROM photo_entries WHERE challenge_id=%s AND jugador_id=%s", (ch["id"], me)):
         flash("Ya subiste tu foto para este reto.")
         return redirect(url_for("reto_foto_galeria"))
 
     f = request.files.get("foto")
-    if not f or not f.filename:
+    if not f or not f.filename or not _allowed_file(f.filename):
         flash("Sube una imagen válida (jpg, jpeg, png, gif).")
         return redirect(url_for("reto_foto_home"))
 
-    if "." not in f.filename:
-        flash("El archivo no tiene extensión.")
-        return redirect(url_for("reto_foto_home"))
     ext = f.filename.rsplit(".", 1)[1].lower()
-    if ext not in ALLOWED_EXTS:
-        flash("Formato no permitido. Usa jpg, jpeg, png o gif.")
-        return redirect(url_for("reto_foto_home"))
-
     raw_name = f"ch{ch['id']}_u{me}_{int(time.time())}.{ext}"
     fname = secure_filename(raw_name)
 
-    # Intento 1: guardar bajo /static/fotos_ch/<id>/
-    d_static = _foto_dir_static(ch["id"])
-    _ensure_dir(d_static)
-    p_static = os.path.join(d_static, fname)
-    saved_path = None
+    # --- LÓGICA DE GUARDADO SIMPLIFICADA ---
+    # Usamos una carpeta temporal que es más probable que funcione en cualquier servidor
+    upload_dir = _foto_dir_tmp(ch["id"])
+    _ensure_dir(upload_dir)
+    save_path = os.path.join(upload_dir, fname)
+
     try:
-        f.stream.seek(0)
-        f.save(p_static)
-        if os.path.exists(p_static):
-            saved_path = ("static", fname)
+        f.save(save_path)
     except Exception as e:
-        print(f"[RETO_FOTO] Error guardando en static: {e}")
-
-    # Plan B: /tmp/uploads_fotos_ch/<id>/
-    if not saved_path:
-        d_tmp = _foto_dir_tmp(ch["id"])
-        _ensure_dir(d_tmp)
-        p_tmp = os.path.join(d_tmp, fname)
-        try:
-            f.stream.seek(0)
-            f.save(p_tmp)
-            if os.path.exists(p_tmp):
-                saved_path = ("tmp", fname)
-        except Exception as e:
-            print(f"[RETO_FOTO] Error guardando en /tmp: {e}")
-
-    if not saved_path:
+        print(f"[RETO_FOTO] Error al guardar la foto en {save_path}: {e}")
         flash("No se pudo guardar la foto en el servidor.")
         return redirect(url_for("reto_foto_home"))
 
-    # Persistir en BD
-    final_filename = fname if saved_path[0] == "static" else f"tmp:{fname}"
+    # Guardamos el nombre del archivo SIN el prefijo "tmp:"
     execute(
         "INSERT INTO photo_entries (challenge_id, jugador_id, filename) VALUES (%s,%s,%s)",
-        (ch["id"], me, final_filename),
+        (ch["id"], me, fname),
     )
     flash("¡Foto subida!")
     return redirect(url_for("reto_foto_galeria"))

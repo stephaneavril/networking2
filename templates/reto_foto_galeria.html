@@ -36,18 +36,10 @@
   <div class="grid">
     {% for e in entries %}
       <div class="tile">
-        <div class="imgwrap">
-          {# Mostrar desde /tmp si el nombre viene con 'tmp:'; si no, servir desde /static y caer a /u_foto si no existe #}
-          {% set fname = e.filename or '' %}
-          {% if fname.startswith('tmp:') %}
-            <img loading="lazy" alt="Foto de {{ e.nombre }}"
-                 src="{{ url_for('serve_tmp_upload', ch_id=reto.id, filename=fname[4:]) }}">
-          {% else %}
-            <img loading="lazy" alt="Foto de {{ e.nombre }}"
-                 src="{{ url_for('static', filename='fotos_ch/' ~ reto.id ~ '/' ~ fname) }}"
-                 onerror="this.onerror=null;this.src='{{ url_for('serve_tmp_upload', ch_id=reto.id, filename=fname) }}'">
-          {% endif %}
-        </div>
+      <div class="imgwrap">
+  <img loading="lazy" alt="Foto de {{ e.nombre }}"
+       src="{{ url_for('serve_tmp_upload', ch_id=reto.id, filename=e.filename) }}">
+</div>
 
         <div class="row" style="justify-content:space-between;align-items:center">
           <div><span class="pill">👤 {{ e.nombre }}</span></div>
