@@ -57,6 +57,14 @@ app.secret_key = os.getenv("FLASK_SECRET", "change-me")
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "letmein")
 
 # ─────────────────────────────────────────────────────────────
+# Adivina: configuración y caché global
+# ─────────────────────────────────────────────────────────────
+ADIVINA_POOL_SIZE = int(os.getenv("ADIVINA_POOL_SIZE", "200"))   # máx personas en el pool global
+ADIVINA_PER_USER  = int(os.getenv("ADIVINA_PER_USER",  "10"))    # cuántas ve cada jugador
+_ADIVINA_CACHE = {"ts": 0, "pool": []}
+_ADIVINA_TTL   = int(os.getenv("ADIVINA_TTL", "60"))             # seg; el pool se regenera cada TTL
+
+# ─────────────────────────────────────────────────────────────
 # Decoradores
 # ─────────────────────────────────────────────────────────────
 def login_required(f):
@@ -199,6 +207,7 @@ def normalize_schema():
     execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS puntos_base  INTEGER NOT NULL DEFAULT 0;")
     execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS puntos_bonus INTEGER NOT NULL DEFAULT 0;")
     execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS puntos_total INTEGER NOT NULL DEFAULT 0;")
+    execute("ALTER TABLE adivina_scores ADD COLUMN IF NOT EXISTS puntaje INTEGER NOT NULL DEFAULT 0;")  # compat
     # Refuerzo para que ON CONFLICT funcione aunque la tabla viniera sin PK
     execute("CREATE UNIQUE INDEX IF NOT EXISTS ux_adivina_jugador ON adivina_scores(jugador_id)")
     execute(r"""
@@ -659,19 +668,25 @@ def preguntas_post_login():
     return redirect(url_for("index_page"))
 
 # ─────────────────────────────────────────────────────────────
-# Juego Adivina Quién
+# Juego Adivina Quién — pool global cacheado
 # ─────────────────────────────────────────────────────────────
-def _participantes_para_juego(mi_id: int, n: int = 10):
+def _build_adivina_pool():
+    """
+    Construye un pool global de participantes con hasta 3 pistas por persona.
+    No filtra al 'yo'; ese filtro se hace por-request.
+    """
     rows = query("""
         SELECT j.id, j.nombre,
                r.r2, r.r3, r.r4, r.r6, r.r8, r.r9, r.r10, r.r12, r.r13
         FROM jugadores j
         JOIN formulario_respuestas r ON r.jugador_id = j.id
-        WHERE j.id <> %s
-    """, (mi_id,))
+    """)
+    if not rows:
+        return []
 
+    # Barajar y recortar a un pool máximo
     random.shuffle(rows)
-    rows = rows[:n] if len(rows) > n else rows
+    rows = rows[:ADIVINA_POOL_SIZE] if len(rows) > ADIVINA_POOL_SIZE else rows
 
     campos = [
         ("🎶 Años en BBVA", "r2"),
@@ -684,7 +699,7 @@ def _participantes_para_juego(mi_id: int, n: int = 10):
         ("👪 Mi pelicula favorita", "r13"),
     ]
 
-    out = []
+    pool = []
     for x in rows:
         disponibles = []
         for label, key in campos:
@@ -693,10 +708,20 @@ def _participantes_para_juego(mi_id: int, n: int = 10):
                 txt = val.strip() if isinstance(val, str) else str(val)
                 if txt:
                     disponibles.append({"label": label, "text": txt})
+        if not disponibles:
+            continue
         random.shuffle(disponibles)
         pistas = disponibles[:3] if len(disponibles) >= 3 else disponibles
-        out.append({"id": x["id"], "nombre": x["nombre"], "pistas": pistas})
-    return out
+        pool.append({"id": x["id"], "nombre": x["nombre"], "pistas": pistas})
+    return pool
+
+def _get_adivina_pool_cached():
+    """Devuelve el pool global desde caché (TTL corto). Si está vencido, lo reconstruye."""
+    now = time.time()
+    if not _ADIVINA_CACHE["pool"] or (now - _ADIVINA_CACHE["ts"] > _ADIVINA_TTL):
+        _ADIVINA_CACHE["pool"] = _build_adivina_pool()
+        _ADIVINA_CACHE["ts"] = now
+    return _ADIVINA_CACHE["pool"]
 
 @app.route("/adivina")
 @login_required
@@ -707,13 +732,15 @@ def adivina():
 
     me = session["jugador_id"]
 
-    # Si el set existe pero está vacío (pudo quedar cacheado), lo regeneramos
+    # Reusa selección congelada en sesión si existe (para que el set no cambie al refrescar)
     participantes = session.get("adivina_set")
     if not participantes:
-        participantes = _participantes_para_juego(me, n=10)  # máximo 10
+        pool = _get_adivina_pool_cached()
+        candidatos = [p for p in pool if p["id"] != me]  # nunca te ves a ti
+        random.shuffle(candidatos)
+        participantes = candidatos[:ADIVINA_PER_USER]
         session["adivina_set"] = participantes
 
-    # Guardas: si sigue sin haber participantes distintos a ti con respuestas, avisa.
     if not participantes:
         flash("Aún no hay suficientes personas con formulario para jugar. Invita a alguien más a completar sus respuestas 🙂")
         return redirect(url_for("index_page"))
@@ -724,6 +751,13 @@ def adivina():
         participantes_json=json.dumps(participantes, ensure_ascii=False)
     )
 
+@app.route("/admin/warmup_adivina", methods=["POST"])
+@admin_required
+def admin_warmup_adivina():
+    _ADIVINA_CACHE["pool"] = _build_adivina_pool()
+    _ADIVINA_CACHE["ts"] = time.time()
+    flash(f"Pool de Adivina precalentado con {len(_ADIVINA_CACHE['pool'])} participantes.")
+    return redirect(url_for("admin_panel"))
 
 @app.route("/adivina_finalizado", methods=["POST"])
 @login_required
@@ -749,13 +783,9 @@ def adivina_finalizado():
         score_previo = query("SELECT puntos_bonus FROM adivina_scores WHERE jugador_id=%s", (me,))
         puntos_bonus = score_previo[0]['puntos_bonus'] if score_previo else 0
 
-    # --- INICIO DE LA CORRECCIÓN ---
-    # Se calcula el total y se usa max(0, ...) para asegurar que el puntaje mínimo sea 0.
     puntos_total_calculado = puntos_base + puntos_bonus
-    puntos_total = max(0, puntos_total_calculado)
-    # --- FIN DE LA CORRECCIÓN ---
+    puntos_total = max(0, puntos_total_calculado)  # nunca negativo
 
-    # Guardado en la base de datos (incluyendo la columna 'puntaje' para compatibilidad)
     execute("""
         INSERT INTO adivina_scores
           (jugador_id, aciertos, rondas, fallos, puntos_base, puntos_bonus, puntos_total, puntaje)
@@ -775,7 +805,7 @@ def adivina_finalizado():
         "ok": True,
         "puntos_base": puntos_base,
         "puntos_bonus": puntos_bonus,
-        "puntos_total": puntos_total # Ahora se enviará 0 en lugar de -50
+        "puntos_total": puntos_total
     })
 
 # ─────────────────────────────────────────────────────────────
@@ -1724,6 +1754,7 @@ def admin_fix_adivina_scores():
     """)
     flash("Adivina: limpiado duplicados y creado índice/PK en jugador_id.")
     return redirect(url_for("admin_panel"))
+
 @app.route("/ranking_adivina")
 @login_required
 def ranking_adivina():
@@ -1737,6 +1768,7 @@ def ranking_adivina():
       ORDER BY s.puntos_total DESC, s.created_at ASC
     """)
     return render_template("ranking_adivina.html", resultados=resultados)
+
 @app.route("/admin/debug_reto_foto")
 @admin_required
 def admin_debug_reto_foto():
