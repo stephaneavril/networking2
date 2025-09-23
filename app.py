@@ -674,15 +674,14 @@ def _participantes_para_juego(mi_id: int, n: int = 10):
     rows = rows[:n] if len(rows) > n else rows
 
     campos = [
-        ("🎶 Pasión", "r2"),
-        ("🧠 Dato curioso", "r3"),
-        ("🎬 Película favorita", "r4"),
-        ("🏀 Deporte favorito", "r6"),
-        ("👕 Prenda imprescindible", "r8"),
-        ("🎤 Mejor concierto", "r9"),
+        ("🎶 Años en BBVA", "r2"),
+        ("🧠 Lo que festejo hoy", "r3"),
+        ("🎬 Mi área", "r4"),
+        ("🏀 Número de reconocimientos en BBVA", "r6"),
+        ("👕 Mi pasión", "r8"),
+        ("🎤 Mi mejor concierto", "r9"),
         ("📚 Libro/Arte favorito", "r10"),
-        ("🐾 Mascota", "r12"),
-        ("👪 Hijos", "r13"),
+        ("👪 Mi pelicula favorita", "r13"),
     ]
 
     out = []
