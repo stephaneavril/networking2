@@ -568,8 +568,10 @@ def index_page():
 
     # >>> Reto Foto (activo por photo_challenges o por flag legado 'retos')
     foto_activo = get_active_photo_challenge()
-    if not foto_activo:
-      #  foto_activo = ensure_default_photo_challenge_from_legacy_flag()
+    # Sin fallback legado:
+    # if not foto_activo:
+    #     foto_activo = ensure_default_photo_challenge_from_legacy_flag()
+
 
     mi_foto = None
     if foto_activo:
