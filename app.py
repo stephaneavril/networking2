@@ -851,8 +851,7 @@ def admin_panel():
             return redirect(url_for("admin_panel"))
 
         if request.form.get("cerrar_reto_foto"):
-            rid = int(request.form["cerrar_reto_foto"])
-            execute("UPDATE photo_challenges SET activo=FALSE WHERE id=%s", (rid,))
+            execute("UPDATE photo_challenges SET activo=FALSE")
             flash("Reto Foto cerrado.")
             return redirect(url_for("admin_panel"))
 
