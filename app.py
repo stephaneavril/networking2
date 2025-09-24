@@ -692,7 +692,7 @@ def _build_adivina_pool():
 
     campos = [
         ("🎶 Años en BBVA", "r2"),
-        ("🧠 Lo que festejo hoy", "r3"),
+        ("🧠 Cuántos propósitos de año nuevo he cumplido hoy", "r3"),
         ("🎬 Mi área", "r4"),
         ("🏀 Número de reconocimientos en BBVA", "r6"),
         ("👕 Mi pasión", "r8"),
